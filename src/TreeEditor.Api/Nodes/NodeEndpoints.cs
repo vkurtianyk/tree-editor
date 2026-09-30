@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using TreeEditor.Api.Caching;
 using TreeEditor.Contracts;
 using TreeEditor.Data;
+using TreeEditor.Domain;
 
 namespace TreeEditor.Api.Nodes;
 
@@ -34,12 +36,16 @@ public static class NodeEndpoints
     private static async Task<Results<Ok<NodeDetails>, ProblemHttpResult>> LoadNodeAsync(
         Guid id,
         TreeDbContext db,
+        ReadCache readCache,
         CancellationToken cancellationToken)
     {
-        var node = await db.Nodes
-            .Where(n => n.Id == id)
-            .Select(n => new NodeDetails(n.Id, n.ParentId, n.Ancestors, n.Value, n.Version, n.IsDeleted))
-            .SingleOrDefaultAsync(cancellationToken);
+        var node = await readCache.GetNodeAsync(
+            id,
+            ct => db.Nodes
+                .Where(n => n.Id == id)
+                .Select(n => new NodeDetails(n.Id, n.ParentId, n.Ancestors, n.Value, n.Version, n.IsDeleted))
+                .SingleOrDefaultAsync(ct),
+            cancellationToken);
 
         return node is null
             ? TypedResults.Problem(
@@ -54,6 +60,7 @@ public static class NodeEndpoints
         string? afterValue,
         Guid? afterId,
         TreeDbContext db,
+        ReadCache readCache,
         CancellationToken cancellationToken)
     {
         if ((afterValue is null) != (afterId is null))
@@ -65,9 +72,35 @@ public static class NodeEndpoints
             });
         }
 
+        var after = afterValue is not null && afterId is { } lastId ? new ChildrenCursor(afterValue, lastId) : null;
+        var page = parentId is { } id
+            ? await readCache.GetChildrenAsync(
+                id, after, ct => RootOfAsync(db, id, ct), ct => QueryChildrenAsync(db, id, after, ct), cancellationToken)
+            : await readCache.GetRootsAsync(after, ct => QueryChildrenAsync(db, parentId: null, after, ct), cancellationToken);
+        return TypedResults.Ok(page);
+    }
+
+    /// <summary>The root of the element's tree; null for an unknown id.</summary>
+    private static async Task<Guid?> RootOfAsync(TreeDbContext db, Guid id, CancellationToken cancellationToken)
+    {
+        var ancestors = await db.Nodes
+            .Where(n => n.Id == id)
+            .Select(n => n.Ancestors)
+            .SingleOrDefaultAsync(cancellationToken);
+        return ancestors is null ? null : Ancestry.RootOf(ancestors);
+    }
+
+    private static async Task<ChildrenPage> QueryChildrenAsync(
+        TreeDbContext db,
+        Guid? parentId,
+        ChildrenCursor? after,
+        CancellationToken cancellationToken)
+    {
         var children = db.Nodes.Where(n => n.ParentId == parentId);
-        if (afterValue is not null && afterId is { } lastId)
+        if (after is not null)
         {
+            var afterValue = after.LowerValue;
+            var lastId = after.Id;
             // Keyset: (lower(value), id) > (@afterValue, @afterId), served by the (parent_id, lower(value), id) index.
             children = children.Where(n => EF.Functions.GreaterThan(
                 ValueTuple.Create(n.Value.ToLower(), n.Id),
@@ -98,6 +131,6 @@ public static class NodeEndpoints
 
         // The cursor carries the database's lowercase value, so the next page compares like with like.
         var next = hasMore ? new ChildrenCursor(rows[^1].LowerValue, rows[^1].Item.Id) : null;
-        return TypedResults.Ok(new ChildrenPage([.. rows.Select(row => row.Item)], hasMore, next));
+        return new ChildrenPage([.. rows.Select(row => row.Item)], hasMore, next);
     }
 }

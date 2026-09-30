@@ -1,5 +1,6 @@
 using Scalar.AspNetCore;
 using TreeEditor.Api.Apply;
+using TreeEditor.Api.Caching;
 using TreeEditor.Api.Errors;
 using TreeEditor.Api.Nodes;
 using TreeEditor.Api.Reset;
@@ -16,6 +17,11 @@ builder.Services.AddExceptionHandler<BadRequestExceptionHandler>();
 // Throw binding failures in every environment so BadRequestExceptionHandler can describe them.
 builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 builder.Services.AddOpenApi();
+
+// In-memory only. Registering an IDistributedCache (e.g. AddRedisDistributedCache) makes it HybridCache's second
+// level with no code change.
+builder.Services.AddHybridCache();
+builder.Services.AddSingleton<ReadCache>();
 
 var app = builder.Build();
 

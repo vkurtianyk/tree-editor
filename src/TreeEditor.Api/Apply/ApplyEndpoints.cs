@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using TreeEditor.Api.Caching;
 using TreeEditor.Contracts;
 using TreeEditor.Data;
 using TreeEditor.Domain;
@@ -41,6 +42,7 @@ public static class ApplyEndpoints
     private static async Task<Results<Ok<ApplyResponse>, ValidationProblem, ProblemHttpResult>> ApplyAsync(
         ApplyRequest request,
         TreeDbContext db,
+        ReadCache readCache,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
@@ -142,6 +144,8 @@ public static class ApplyEndpoints
         }
 
         await transaction.CommitAsync(cancellationToken);
+        // Only after the commit: invalidating earlier would let a read store the old data again.
+        await readCache.InvalidateAsync(roots, applied.Select(node => node.Id));
         return TypedResults.Ok(new ApplyResponse(applied));
     }
 
