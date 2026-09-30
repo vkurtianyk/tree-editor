@@ -50,7 +50,10 @@ public static class ApplyEndpoints
         }
 
         // An element's root never changes, so the touched roots can be read before the transaction.
-        var roots = await TouchedRootsAsync(db, edits, deletes, cancellationToken);
+        var roots = await TouchedRootsAsync(
+            db,
+            [.. edits.Select(edit => edit.Id), .. deletes.Select(delete => delete.Id)],
+            cancellationToken);
         loggerFactory.CreateLogger(typeof(ApplyEndpoints))
             .LogInformation(
                 "Applying {EditCount} edits and {DeleteCount} deletes in {RootCount} root trees",
@@ -171,11 +174,9 @@ public static class ApplyEndpoints
 
     private static async Task<List<Guid>> TouchedRootsAsync(
         TreeDbContext db,
-        List<NodeEdit> edits,
-        List<NodeDelete> deletes,
+        Guid[] ids,
         CancellationToken cancellationToken)
     {
-        var ids = edits.Select(edit => edit.Id).Concat(deletes.Select(delete => delete.Id)).ToArray();
         var ancestors = await db.Nodes
             .Where(n => ids.Contains(n.Id))
             .Select(n => n.Ancestors)

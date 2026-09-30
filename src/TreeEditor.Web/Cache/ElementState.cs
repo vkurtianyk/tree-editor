@@ -9,13 +9,13 @@ public enum ElementState
     /// <summary>Its value was changed locally and waits for Apply.</summary>
     Edited,
 
+    /// <summary>Added locally and never applied: it exists only in the cache.</summary>
+    New,
+
     /// <summary>
     /// Deleted locally, by itself or with an ancestor, and waits for Apply. It shows as deleted with its loaded value.
     /// </summary>
     Deleted,
-
-    /// <summary>Added locally and never applied: it exists only in the cache.</summary>
-    New,
 }
 
 /// <summary>
