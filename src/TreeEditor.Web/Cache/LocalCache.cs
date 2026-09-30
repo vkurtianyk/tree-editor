@@ -36,6 +36,7 @@ public sealed class LocalCache(ICacheApiClient api)
     /// Loads an element into the cache through load node. An element that is already cached is left as it is and
     /// not requested again, so a reload can never overwrite it. Load errors propagate and cache nothing.
     /// A load that finishes after <see cref="Clear"/> caches nothing either: it read the database before the clear.
+    /// An element loaded below a cached deleted ancestor is deleted too (see <see cref="DeleteBelowDeletedAncestor"/>).
     /// </summary>
     public async Task LoadElementAsync(Guid id, CancellationToken cancellationToken = default)
     {
@@ -53,6 +54,7 @@ public sealed class LocalCache(ICacheApiClient api)
             return;
         }
 
+        DeleteBelowDeletedAncestor(state.Elements[id]);
         state.ViewTree = null;
         Changed?.Invoke();
     }
@@ -108,6 +110,49 @@ public sealed class LocalCache(ICacheApiClient api)
     }
 
     /// <summary>
+    /// Deletes an element locally with every cached descendant, found by ancestors, so also below placeholders;
+    /// nothing is sent until <see cref="ApplyAsync"/>. Their pending edits are dropped: they show their loaded values.
+    /// Elements added locally are removed, as they never reached the database; descendants already deleted there
+    /// stay as they are.
+    /// </summary>
+    public void Delete(Guid id)
+    {
+        if (IsApplying)
+        {
+            throw new InvalidOperationException("Elements can't be deleted while an Apply is in flight.");
+        }
+
+        if (!state.Elements.TryGetValue(id, out var element))
+        {
+            throw new InvalidOperationException($"The element {id} isn't cached.");
+        }
+
+        if (element.IsDeleted)
+        {
+            throw new InvalidOperationException($"The element {id} is already deleted.");
+        }
+
+        var subtree = state.Elements.Values
+            .Where(member => member.Id == id || Ancestry.IsDescendantOf(member.Ancestors, id))
+            .ToList();
+        foreach (var member in subtree)
+        {
+            if (member.State == ElementState.New)
+            {
+                state.Elements.Remove(member.Id);
+                state.Originals.Remove(member.Id);
+            }
+            else if (!member.IsDeleted)
+            {
+                MarkPendingDeleted(member);
+            }
+        }
+
+        state.ViewTree = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>
     /// Drops every pending change: changed elements go back to their loaded state, and clean elements stay cached.
     /// Nothing is sent to the server.
     /// </summary>
@@ -134,10 +179,11 @@ public sealed class LocalCache(ICacheApiClient api)
     }
 
     /// <summary>
-    /// Sends every pending change in one request, each edit with the version it was loaded with. On success the final
-    /// values and versions are stored and nothing is pending any more. On an error everything stays pending and the
-    /// error propagates. Does nothing when <see cref="CanApply"/> is false. A response that arrives after
-    /// <see cref="Clear"/> stores nothing: the elements it was for are gone.
+    /// Sends every pending change in one request, each edit and delete with the version it was loaded with. Only the
+    /// topmost deletes go: the server's cascade covers their descendants. On success the final values and versions
+    /// are stored and nothing is pending any more. On an error everything stays pending and the error propagates.
+    /// Does nothing when <see cref="CanApply"/> is false. A response that arrives after <see cref="Clear"/> stores
+    /// nothing: the elements it was for are gone.
     /// </summary>
     public async Task ApplyAsync(CancellationToken cancellationToken = default)
     {
@@ -148,9 +194,15 @@ public sealed class LocalCache(ICacheApiClient api)
 
         var edits = state.Originals.Keys
             .Select(id => state.Elements[id])
+            .Where(element => element.State == ElementState.Edited)
             .Select(element => new NodeEdit(element.Id, element.Value, element.Version))
             .ToList();
-        var request = new ApplyRequest(Inserts: [], edits, Deletes: []);
+        var deletes = state.Originals.Keys
+            .Select(id => state.Elements[id])
+            .Where(element => element.State == ElementState.Deleted && !HasPendingDeletedAncestor(element))
+            .Select(element => new NodeDelete(element.Id, element.Version))
+            .ToList();
+        var request = new ApplyRequest(Inserts: [], edits, deletes);
 
         var applyingIn = state;
         applyingIn.IsApplying = true;
@@ -180,7 +232,10 @@ public sealed class LocalCache(ICacheApiClient api)
         Changed?.Invoke();
     }
 
-    /// <summary>The applied elements become clean, with the server's final values and versions.</summary>
+    /// <summary>
+    /// The applied elements become clean, with the server's final values and versions. Cached descendants of the
+    /// deleted ones are deleted too, like the server's cascade.
+    /// </summary>
     private void StoreApplied(ApplyResponse response)
     {
         foreach (var id in state.Originals.Keys)
@@ -202,8 +257,72 @@ public sealed class LocalCache(ICacheApiClient api)
             }
         }
 
+        foreach (var node in response.Nodes.Where(node => node.IsDeleted))
+        {
+            StoreDeletedSubtree(node.Id);
+        }
+
         state.Originals.Clear();
         state.ViewTree = null;
+    }
+
+    /// <summary>Records a pending delete: the loaded copy is kept, and any pending edit is dropped.</summary>
+    private void MarkPendingDeleted(CachedElement element)
+    {
+        var loaded = state.Originals.GetValueOrDefault(element.Id, element);
+        state.Originals.TryAdd(element.Id, loaded);
+        state.Elements[element.Id] = loaded with { IsDeleted = true, State = ElementState.Deleted };
+    }
+
+    private bool HasPendingDeletedAncestor(CachedElement element) =>
+        element.Ancestors
+            .Where(ancestorId => ancestorId != element.Id)
+            .Any(ancestorId => state.Elements.GetValueOrDefault(ancestorId)?.State == ElementState.Deleted);
+
+    /// <summary>
+    /// The cache never holds a live element below a deleted one. Below a pending delete, a newly loaded element
+    /// becomes a pending delete as well. Below an element deleted in the database, it was read before that delete
+    /// committed, so it is deleted there by now.
+    /// </summary>
+    private void DeleteBelowDeletedAncestor(CachedElement element)
+    {
+        if (element.IsDeleted)
+        {
+            return;
+        }
+
+        var deletedAncestors = element.Ancestors
+            .Where(ancestorId => ancestorId != element.Id)
+            .Select(ancestorId => state.Elements.GetValueOrDefault(ancestorId))
+            .OfType<CachedElement>()
+            .Where(ancestor => ancestor.IsDeleted)
+            .ToList();
+        if (deletedAncestors.Count == 0)
+        {
+            return;
+        }
+
+        if (deletedAncestors.TrueForAll(ancestor => ancestor.State == ElementState.Deleted))
+        {
+            MarkPendingDeleted(element);
+        }
+        else
+        {
+            state.Elements[element.Id] = element with { IsDeleted = true };
+        }
+    }
+
+    /// <summary>The database deleted the element's subtree: every cached descendant is deleted, with nothing pending.</summary>
+    private void StoreDeletedSubtree(Guid id)
+    {
+        var descendants = state.Elements.Values
+            .Where(element => Ancestry.IsDescendantOf(element.Ancestors, id))
+            .ToList();
+        foreach (var descendant in descendants)
+        {
+            state.Originals.Remove(descendant.Id);
+            state.Elements[descendant.Id] = descendant with { IsDeleted = true, State = ElementState.Clean };
+        }
     }
 
     /// <summary>

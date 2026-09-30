@@ -3,7 +3,8 @@ using TreeEditor.Web.Cache;
 namespace TreeEditor.Web.Tests.Cache;
 
 /// <summary>
-/// A view tree as indented lines, two spaces per level. Elements show their value (plus " [deleted]", " [edited]");
+/// A view tree as indented lines, two spaces per level. Elements show their value (plus " [deleted]", " [edited]",
+/// and " [pending]" for a delete that waits for Apply);
 /// placeholders show "… count (first..last)" with the names of the missing ancestors, or "… 1 (name)".
 /// </summary>
 internal static class Outline
@@ -23,7 +24,8 @@ internal static class Outline
                 {
                     CachedElementRow { Element: var element } =>
                         $"{indent}{element.Value}{(element.IsDeleted ? " [deleted]" : "")}" +
-                        (element.State == ElementState.Edited ? " [edited]" : ""),
+                        (element.State == ElementState.Edited ? " [edited]" : "") +
+                        (element.State == ElementState.Deleted ? " [pending]" : ""),
                     PlaceholderRow { MissingIds: var missing } when missing.Count == 1 =>
                         $"{indent}… 1 ({tree.NameOf(missing[0])})",
                     PlaceholderRow { MissingIds: var missing } =>
