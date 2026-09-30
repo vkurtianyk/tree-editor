@@ -13,6 +13,10 @@
                     {
                         <span class="tree-marker edited" title="Edited; not applied yet">edited</span>
                     }
+                    @if (element.State == ElementState.New)
+                    {
+                        <span class="tree-marker new" title="New; not applied yet">new</span>
+                    }
                 </div>
                 @ChildrenOf(row)
             </div>

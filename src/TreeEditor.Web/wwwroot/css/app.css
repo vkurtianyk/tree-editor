@@ -75,6 +75,11 @@
         border: 1px solid var(--mud-palette-warning);
     }
 
+    .tree-marker.new {
+        color: var(--mud-palette-success-darken);
+        border: 1px solid var(--mud-palette-success);
+    }
+
 /* Inline value editor above CachedTreeView. */
 .tree-editor {
     display: flex;
