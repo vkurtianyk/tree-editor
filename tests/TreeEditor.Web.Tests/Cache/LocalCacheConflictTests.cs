@@ -351,16 +351,56 @@ public sealed class LocalCacheConflictTests
         cache.Delete(n["Alpha"].Id);
 
         Assert.False(cache.HasUnresolvedConflicts);
+        // Each conflict showed the loaded copy is stale: the delete goes on from the database's.
         Assert.Equal(
-            CachedElement.From(n["A1"]) with { IsDeleted = true, State = ElementState.Deleted },
+            CachedElement.From(n["A1"]) with
+            {
+                Value = "A1 elsewhere",
+                Version = 2000,
+                IsDeleted = true,
+                State = ElementState.Deleted,
+            },
             cache.Find(n["A1"].Id));
         Assert.Equal(
-            CachedElement.From(n["A2"]) with { IsDeleted = true, State = ElementState.Deleted },
+            CachedElement.From(n["A2"]) with
+            {
+                Value = "A2 elsewhere",
+                Version = 2001,
+                IsDeleted = true,
+                State = ElementState.Deleted,
+            },
             cache.Find(n["A2"].Id));
         api.OnApply(_ => Task.FromResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Alpha", 5000, true)])));
         await cache.ApplyAsync(TestContext.Current.CancellationToken);
         Assert.Empty(api.ApplyRequests[^1].Edits);
         Assert.Equal(new NodeDelete(n["Alpha"].Id, n["Alpha"].Version), Assert.Single(api.ApplyRequests[^1].Deletes));
+    }
+
+    [Fact]
+    public async Task Discard_all_after_deleting_an_ancestor_takes_the_database_copy_of_the_conflicts_below_it()
+    {
+        var (tree, n) = Sample();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Alpha"], n["A1"], n["A2"]);
+        cache.EditValue(n["A1"].Id, "A1 mine");
+        cache.Delete(n["A2"].Id);
+        OnApplyConflict(
+            api,
+            new NodeConflict(n["A1"].Id, ConflictReason.VersionChanged, "A1 elsewhere", 2000, false),
+            new NodeConflict(n["A2"].Id, ConflictReason.VersionChanged, "A2 elsewhere", 2001, false));
+        await ApplyRejectedAsync(cache);
+        cache.Delete(n["Alpha"].Id);
+
+        cache.DiscardAll();
+
+        Assert.Equal(CachedElement.From(n["Alpha"]), cache.Find(n["Alpha"].Id));
+        Assert.Equal(
+            CachedElement.From(n["A1"]) with { Value = "A1 elsewhere", Version = 2000 },
+            cache.Find(n["A1"].Id));
+        Assert.Equal(
+            CachedElement.From(n["A2"]) with { Value = "A2 elsewhere", Version = 2001 },
+            cache.Find(n["A2"].Id));
+        Assert.False(cache.HasPendingChanges);
     }
 
     [Fact]

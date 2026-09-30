@@ -189,7 +189,8 @@ public sealed class LocalCache(ICacheApiClient api)
     /// Deletes an element locally with every cached descendant, found by ancestors, so also below placeholders;
     /// nothing is sent until <see cref="ApplyAsync"/>. Their pending edits are dropped: they show their loaded values.
     /// Elements added locally are removed, as they never reached the database; descendants already deleted there
-    /// stay as they are. Conflicts of descendants are resolved by the delete: their changes are dropped or covered.
+    /// stay as they are. Conflicts of descendants are resolved by the delete: their changes are dropped or covered,
+    /// and their database copy replaces the stale loaded one, so a discard goes back to it.
     /// </summary>
     public void Delete(Guid id)
     {
@@ -220,15 +221,16 @@ public sealed class LocalCache(ICacheApiClient api)
                 state.Elements.Remove(member.Id);
                 state.NewIds.Remove(member.Id);
             }
+            else if (member.Conflict is { } conflict)
+            {
+                // The conflict showed the loaded copy is stale. A conflicting pending delete below isn't sent any
+                // more either: this delete covers it.
+                state.Originals[member.Id] = DatabaseCopy(state.Originals[member.Id], conflict);
+                MarkPendingDeleted(member);
+            }
             else if (!member.IsDeleted)
             {
                 MarkPendingDeleted(member);
-            }
-            else if (member.Conflict is not null)
-            {
-                // A conflicting pending delete below isn't sent any more: this delete covers it.
-                state.Elements[member.Id] = member with { Conflict = null };
-                state.ConflictIds.Remove(member.Id);
             }
         }
 
