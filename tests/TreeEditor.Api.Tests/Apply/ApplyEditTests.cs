@@ -228,7 +228,7 @@ public sealed class ApplyEditTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Inserts_and_deletes_are_not_supported_yet()
+    public async Task Inserts_are_not_supported_yet()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
@@ -242,7 +242,8 @@ public sealed class ApplyEditTests(PostgresFixture postgres)
             cancellationToken);
 
         var problem = await AssertValidationProblemAsync(response, cancellationToken);
-        Assert.Equal(["deletes", "inserts"], problem.Errors.Keys.Order());
+        Assert.Equal(["inserts"], problem.Errors.Keys);
+        Assert.False((await LoadAsync(api, alpha.Id, cancellationToken)).IsDeleted);
     }
 
     [Fact]
