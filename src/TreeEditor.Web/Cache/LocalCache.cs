@@ -282,12 +282,13 @@ public sealed class LocalCache(ICacheApiClient api)
     /// Nothing is sent again by itself.
     /// Does nothing when <see cref="CanApply"/> is false. A response or conflict that arrives after
     /// <see cref="Clear"/> stores nothing: the elements it was for are gone.
+    /// Returns whether a response was stored, so false when nothing was sent or a clear came first.
     /// </summary>
-    public async Task ApplyAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> ApplyAsync(CancellationToken cancellationToken = default)
     {
         if (!CanApply)
         {
-            return;
+            return false;
         }
 
         var inserts = state.NewIds
@@ -312,10 +313,13 @@ public sealed class LocalCache(ICacheApiClient api)
         try
         {
             var response = await api.ApplyAsync(request, cancellationToken);
-            if (applyingIn == state)
+            if (applyingIn != state)
             {
-                StoreApplied(response);
+                return false;
             }
+
+            StoreApplied(response);
+            return true;
         }
         catch (ApplyRejectedException rejected) when (rejected.StatusCode == HttpStatusCode.Conflict)
         {

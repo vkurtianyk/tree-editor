@@ -41,8 +41,9 @@ public sealed class LocalCacheApplyTests
         // The server resolved a suffix against Delta, which isn't cached.
         api.OnApply(_ => Task.FromResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Delta (1)", 5000, IsDeleted: false)])));
 
-        await cache.ApplyAsync(TestContext.Current.CancellationToken);
+        var stored = await cache.ApplyAsync(TestContext.Current.CancellationToken);
 
+        Assert.True(stored);
         Assert.False(cache.HasPendingChanges);
         Assert.False(cache.IsApplying);
         Assert.Equal(
@@ -89,8 +90,8 @@ public sealed class LocalCacheApplyTests
         Assert.True(cache.IsApplying);
         Assert.False(cache.CanApply);
         Assert.True(cache.HasPendingChanges);
-        // A second Apply while one is in flight sends nothing.
-        await cache.ApplyAsync(TestContext.Current.CancellationToken);
+        // A second Apply while one is in flight sends nothing, and says so.
+        Assert.False(await cache.ApplyAsync(TestContext.Current.CancellationToken));
         Assert.Single(api.ApplyRequests);
         // Edits and discard wait for the response.
         Assert.Throws<InvalidOperationException>(() => cache.EditValue(n["Alpha"].Id, "Omega"));

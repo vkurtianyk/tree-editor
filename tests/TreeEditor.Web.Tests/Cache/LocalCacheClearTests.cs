@@ -96,7 +96,7 @@ public sealed class LocalCacheClearTests
         Assert.False(cache.CanApply);
         await cache.LoadElementAsync(n["Alpha"].Id, cancellationToken);
         Assert.Equal(CachedElement.From(n["Alpha"]), cache.Find(n["Alpha"].Id));
-        await cache.ApplyAsync(cancellationToken);
+        Assert.False(await cache.ApplyAsync(cancellationToken));
         Assert.Empty(api.ApplyRequests);
     }
 
@@ -116,9 +116,10 @@ public sealed class LocalCacheClearTests
         Assert.False(cache.IsApplying);
         await cache.LoadElementAsync(n["Alpha"].Id, cancellationToken);
         response.SetResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Gamma", 5000, IsDeleted: false)]));
-        await apply;
+        var stored = await apply;
 
         // The response answers a request sent before the clear (a Reset): the element loaded since keeps what it read.
+        Assert.False(stored);
         Assert.Equal(CachedElement.From(n["Alpha"]), cache.Find(n["Alpha"].Id));
         Assert.False(cache.HasPendingChanges);
         Assert.False(cache.IsApplying);
@@ -143,12 +144,12 @@ public sealed class LocalCacheClearTests
         var secondApply = cache.ApplyAsync(cancellationToken);
 
         first.SetResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Gamma", 5000, IsDeleted: false)]));
-        await firstApply;
+        Assert.False(await firstApply);
 
         Assert.True(cache.IsApplying);
         Assert.Equal(ElementState.Edited, cache.Find(n["Alpha"].Id)?.State);
         second.SetResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Omega", 5001, IsDeleted: false)]));
-        await secondApply;
+        Assert.True(await secondApply);
         Assert.False(cache.IsApplying);
         Assert.Equal(
             CachedElement.From(n["Alpha"]) with { Value = "Omega", Version = 5001 },

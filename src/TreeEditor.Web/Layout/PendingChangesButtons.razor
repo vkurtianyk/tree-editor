@@ -26,7 +26,13 @@
     {
         try
         {
-            await Cache.ApplyAsync();
+            // Nothing was stored when the click came after Apply was disabled, or a Reset cleared the cache while
+            // the request was in flight; the Reset's own message and reload stand then.
+            if (!await Cache.ApplyAsync())
+            {
+                return;
+            }
+
             DbTree.Request();
             Snackbar.Add("The changes are applied.", Severity.Success);
         }
@@ -38,7 +44,9 @@
         }
         catch (HttpRequestException ex)
         {
-            Snackbar.Add($"Apply failed; the changes are still pending. {ex.Message}", Severity.Error);
+            // After a Reset cleared the cache, nothing is pending any more.
+            var pending = Cache.HasPendingChanges ? "; the changes are still pending" : "";
+            Snackbar.Add($"Apply failed{pending}. {ex.Message}", Severity.Error);
         }
     }
 
