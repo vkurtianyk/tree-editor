@@ -128,6 +128,35 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
             Values(await ListAsync(api, parentId: null, first.Next, cancellationToken)));
     }
 
+    [Fact]
+    public async Task List_and_load_right_after_a_Reset_return_the_seed()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var seed = new TreeBuilder();
+        var home = seed.Root("Home");
+        var kitchen = seed.Child(home, "Kitchen");
+        await api.ArrangeSeedAsync(seed, cancellationToken);
+        NodeEdit[] edits =
+        [
+            new(home.Id, "Attic", await VersionInDatabaseAsync(api, home.Id, cancellationToken)),
+            new(kitchen.Id, "Pantry", await VersionInDatabaseAsync(api, kitchen.Id, cancellationToken)),
+        ];
+        await ApplyEditsAsync(api, edits, cancellationToken);
+        Assert.Equal(["Attic"], Values(await ListAsync(api, parentId: null, after: null, cancellationToken)));
+        Assert.Equal(["Pantry"], Values(await ListAsync(api, home.Id, after: null, cancellationToken)));
+        Assert.Equal("Pantry", (await LoadAsync(api, kitchen.Id, cancellationToken)).Value);
+
+        using var reset = await api.Client.PostAsync(ApiRoutes.Reset, content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NoContent, reset.StatusCode);
+        Assert.Equal(["Home"], Values(await ListAsync(api, parentId: null, after: null, cancellationToken)));
+        Assert.Equal(["Kitchen"], Values(await ListAsync(api, home.Id, after: null, cancellationToken)));
+        var loaded = await LoadAsync(api, kitchen.Id, cancellationToken);
+        Assert.Equal("Kitchen", loaded.Value);
+        Assert.Equal(await VersionInDatabaseAsync(api, kitchen.Id, cancellationToken), loaded.Version);
+    }
+
     private static string[] Values(ChildrenPage page) => [.. page.Items.Select(item => item.Value)];
 
     private static async Task<ChildrenPage> ListAsync(
@@ -162,5 +191,12 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
         var db = scope.ServiceProvider.GetRequiredService<TreeDbContext>();
         await db.Nodes.Where(n => n.Id == id)
             .ExecuteUpdateAsync(s => s.SetProperty(n => n.Value, value), cancellationToken);
+    }
+
+    private static async Task<uint> VersionInDatabaseAsync(ApiHarness api, Guid id, CancellationToken cancellationToken)
+    {
+        await using var scope = api.CreateDatabaseScope();
+        var db = scope.ServiceProvider.GetRequiredService<TreeDbContext>();
+        return await db.Nodes.Where(n => n.Id == id).Select(n => n.Version).SingleAsync(cancellationToken);
     }
 }

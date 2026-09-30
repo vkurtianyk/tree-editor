@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using TreeEditor.Api.Caching;
 using TreeEditor.Contracts;
 using TreeEditor.Data;
 
@@ -24,7 +25,10 @@ public static class ResetEndpoints
         return app;
     }
 
-    private static async Task<NoContent> ResetAsync(TreeDbContext db, CancellationToken cancellationToken)
+    private static async Task<NoContent> ResetAsync(
+        TreeDbContext db,
+        ReadCache readCache,
+        CancellationToken cancellationToken)
     {
         db.Database.SetCommandTimeout(ResetCommandTimeout);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
@@ -37,6 +41,7 @@ public static class ResetEndpoints
         // Fresh statistics, as after the first fill: TRUNCATE resets the table's size estimates.
         await db.Database.ExecuteSqlRawAsync("ANALYZE nodes", cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        await readCache.ClearAsync();
 
         return TypedResults.NoContent();
     }

@@ -95,6 +95,9 @@ public sealed class ReadCache(HybridCache cache)
         return cache.RemoveByTagAsync(tags, CancellationToken.None);
     }
 
+    /// <summary>After a Reset commits: every entry.</summary>
+    public ValueTask ClearAsync() => cache.RemoveByTagAsync("*", CancellationToken.None);
+
     private static string RootTag(Guid rootId) => $"root:{rootId}";
 
     private static string ChildrenKey(Guid? parentId, ChildrenCursor? after)
