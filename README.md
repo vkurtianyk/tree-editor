@@ -79,12 +79,12 @@ Reasons and rejected options: [docs/DECISIONS.md](docs/DECISIONS.md).
 
 Ids are the same on every machine and seed size. Use them in Scalar, or find the names in the UI.
 
-| Element                                      | Id                                     | Hint                        |
-|----------------------------------------------|----------------------------------------|-----------------------------|
-| Root "Industrial"                            | `019b76da-a800-709f-b3bf-d4c669178afe` | holds the 200-level chain   |
-| Chain start "Unbranded Soft Chicken"         | `019b76da-a805-73fe-9941-734233ec6816` | level 2; cache Industrial and "Level 4 …" to see a placeholder |
-| Chain end "Level 200 Refined Plastic Cheese" | `019b76da-a8de-7489-9cc7-0abfe336c739` | deepest element (level 200) |
-| Wide "Fantastic Wooden Keyboard" (Home)      | `019b76da-a8df-75ee-af0f-faac623e41b7` | 9,626 children; paging      |
+| Element                                      | Where in the DB tree                          | Id                                     | Hint                        |
+|----------------------------------------------|-----------------------------------------------|----------------------------------------|-----------------------------|
+| "Industrial"                                 | root                                          | `019b76da-a800-709f-b3bf-d4c669178afe` | holds the 200-level chain   |
+| "Unbranded Soft Chicken" (chain start)       | Industrial → last (20th) child                | `019b76da-a805-73fe-9941-734233ec6816` | cache Industrial and "Level 4 …" to see a placeholder |
+| "Level 200 Refined Plastic Cheese" (chain end) | Industrial → Unbranded Soft Chicken → … | `019b76da-a8de-7489-9cc7-0abfe336c739` | deepest element (level 200) |
+| "Fantastic Wooden Keyboard" (wide)           | Home → 5th child                              | `019b76da-a8df-75ee-af0f-faac623e41b7` | 9,626 children; "Load 100 more" |
 
 ## Tests
 
