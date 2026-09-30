@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure tree rules, no I/O. Referenced by Api, MigrationService and Web (runs in WebAssembly too). -->
+
+</Project>

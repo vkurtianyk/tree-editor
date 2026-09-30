@@ -5,4 +5,11 @@
     <File Path="Directory.Packages.props" />
     <File Path="global.json" />
   </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/TreeEditor.Contracts/TreeEditor.Contracts.csproj" />
+    <Project Path="src/TreeEditor.Domain/TreeEditor.Domain.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TreeEditor.Domain.Tests/TreeEditor.Domain.Tests.csproj" />
+  </Folder>
 </Solution>

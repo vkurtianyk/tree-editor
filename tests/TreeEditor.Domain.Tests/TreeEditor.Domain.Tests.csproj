@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TreeEditor.Domain\TreeEditor.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
