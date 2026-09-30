@@ -1,6 +1,6 @@
 @* The local cache's elements in their hierarchy. Ancestors that aren't cached show as placeholder rows;
-   only real elements can be selected. The selected live element's value can be edited; the edit stays local
-   until Apply. *@
+   only real elements can be selected. The selected live element's value can be edited, or it can be deleted with
+   its subtree; changes stay local until Apply. *@
 @using TreeEditor.Domain
 @implements IDisposable
 @inject LocalCache Cache
@@ -10,6 +10,10 @@
     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                StartIcon="@Icons.Material.Filled.Edit" Disabled="@(!CanEdit)" OnClick="StartEdit">
         Edit
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Delete" Disabled="@(!CanDelete)" OnClick="DeleteSelected">
+        Delete
     </MudButton>
 </div>
 
@@ -48,6 +52,8 @@
     private CachedElement? Selected => SelectedId is { } id ? Cache.Find(id) : null;
 
     private bool CanEdit => Selected is { IsDeleted: false } && !Cache.IsApplying;
+
+    private bool CanDelete => Selected is { IsDeleted: false } && !Cache.IsApplying;
 
     /// <summary>The element being edited, while it is still selected, cached and live.</summary>
     private CachedElement? Editing => editingId == SelectedId && Selected is { IsDeleted: false } element
@@ -105,6 +111,18 @@
         }
 
         CancelEdit();
+    }
+
+    /// <summary>Deletes the selected element with its cached subtree; the delete stays local until Apply.</summary>
+    private void DeleteSelected()
+    {
+        if (!CanDelete || Selected is not { } element)
+        {
+            return;
+        }
+
+        CancelEdit();
+        Cache.Delete(element.Id);
     }
 
     private void OnEditorKeyDown(KeyboardEventArgs args)
