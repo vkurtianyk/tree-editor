@@ -14,6 +14,9 @@ public static class ApiRoutes
     /// </summary>
     public const string Children = Nodes + "/children";
 
+    /// <summary>Reset (POST): restores the sample data; 204 when done.</summary>
+    public const string Reset = "/api/reset";
+
     public static string NodeById(Guid id) => $"{Nodes}/{id}";
 
     public static string ChildrenOf(Guid? parentId, ChildrenCursor? after = null)

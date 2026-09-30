@@ -43,6 +43,31 @@ public sealed class ApiHarness : IAsyncDisposable
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Writes the tree to <c>seed_nodes</c> as the sample data, then fills <c>nodes</c> from it the way the
+    /// MigrationService does.
+    /// </summary>
+    public async Task ArrangeSeedAsync(TreeBuilder seed, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<TreeDbContext>();
+        db.SeedNodes.AddRange(seed.Nodes.Select(node => new SeedNode
+        {
+            Id = node.Id,
+            ParentId = node.ParentId,
+            Ancestors = node.Ancestors,
+            Value = node.Value,
+            IsDeleted = node.IsDeleted,
+        }));
+        await db.SaveChangesAsync(cancellationToken);
+        await db.Database.FillNodesFromSeedAsync(cancellationToken);
+    }
+
+    /// <summary>A scope with a <see cref="TreeDbContext"/> on the test database, for changing data behind the API's back.</summary>
+    public AsyncServiceScope CreateDatabaseScope() => factory.Services.CreateAsyncScope();
+
     public async ValueTask DisposeAsync()
     {
         Client.Dispose();
