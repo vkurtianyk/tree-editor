@@ -10,6 +10,7 @@ namespace TreeEditor.Web.Trees;
 public sealed class DbTreeLevel(Guid? parentId)
 {
     private readonly List<DbTreeNode> nodes = [];
+    private readonly HashSet<Guid> listedIds = [];
     private ChildrenCursor? next;
 
     public Guid? ParentId { get; } = parentId;
@@ -41,7 +42,9 @@ public sealed class DbTreeLevel(Guid? parentId)
         try
         {
             var page = await api.ListChildrenAsync(ParentId, next, cancellationToken);
-            nodes.AddRange(page.Items.Select(item => new DbTreeNode(item)));
+            // A child renamed past the cursor since an earlier page comes again; it keeps the row it has, as
+            // two rows with one id would break the view's @key.
+            nodes.AddRange(page.Items.Where(item => listedIds.Add(item.Id)).Select(item => new DbTreeNode(item)));
             next = page.Next;
             IsLoaded = true;
         }
