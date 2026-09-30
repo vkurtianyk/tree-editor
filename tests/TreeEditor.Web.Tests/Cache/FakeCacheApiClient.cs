@@ -18,6 +18,7 @@ internal sealed class FakeCacheApiClient(TestTree tree) : ICacheApiClient
 {
     private readonly List<ApiCall> calls = [];
     private readonly Queue<Func<ApplyRequest, Task<ApplyResponse>>> applyOutcomes = new();
+    private readonly Queue<TaskCompletionSource> heldLoads = new();
 
     public IReadOnlyList<ApiCall> Calls => calls;
 
@@ -33,13 +34,31 @@ internal sealed class FakeCacheApiClient(TestTree tree) : ICacheApiClient
             .. request.Edits.Select(edit => new AppliedNode(edit.Id, edit.Value, newVersion, IsDeleted: false)),
         ])));
 
-    public Task<NodeDetails> LoadNodeAsync(Guid id, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Holds the next load's response until the returned source completes. The element is read when the load
+    /// starts, so it arrives as it was then, whatever changed meanwhile.
+    /// </summary>
+    public TaskCompletionSource HoldNextLoad()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        heldLoads.Enqueue(release);
+        return release;
+    }
+
+    public async Task<NodeDetails> LoadNodeAsync(Guid id, CancellationToken cancellationToken = default)
     {
         calls.Add(new LoadCall(id));
-        return tree.TryGet(id, out var node)
-            ? Task.FromResult(node)
-            : Task.FromException<NodeDetails>(
-                new HttpRequestException($"No element has the id {id}.", null, HttpStatusCode.NotFound));
+        if (!tree.TryGet(id, out var node))
+        {
+            throw new HttpRequestException($"No element has the id {id}.", null, HttpStatusCode.NotFound);
+        }
+
+        if (heldLoads.TryDequeue(out var release))
+        {
+            await release.Task;
+        }
+
+        return node;
     }
 
     public Task<ApplyResponse> ApplyAsync(ApplyRequest request, CancellationToken cancellationToken = default)

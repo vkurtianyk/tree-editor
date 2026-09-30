@@ -17,6 +17,10 @@
                     {
                         <span class="tree-marker new" title="New; not applied yet">new</span>
                     }
+                    @if (element.State == ElementState.Deleted)
+                    {
+                        <span class="tree-marker deleted" title="Deleted; not applied yet">deleted</span>
+                    }
                 </div>
                 @ChildrenOf(row)
             </div>

@@ -11,6 +11,11 @@ public enum ElementState
 
     /// <summary>Created locally and waits for Apply to insert it; its version is unknown until then.</summary>
     New,
+
+    /// <summary>
+    /// Deleted locally, by itself or with an ancestor, and waits for Apply. It shows as deleted with its loaded value.
+    /// </summary>
+    Deleted,
 }
 
 /// <summary>

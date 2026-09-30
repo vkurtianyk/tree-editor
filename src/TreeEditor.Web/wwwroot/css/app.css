@@ -80,6 +80,11 @@
         border: 1px solid var(--mud-palette-success);
     }
 
+    .tree-marker.deleted {
+        color: var(--mud-palette-error-darken);
+        border: 1px solid var(--mud-palette-error);
+    }
+
 /* Inline value editor above CachedTreeView. */
 .tree-editor {
     display: flex;

@@ -228,24 +228,6 @@ public sealed class ApplyEditTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Deletes_are_not_supported_yet()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
-        var tree = new TreeBuilder();
-        var alpha = tree.Root("Alpha");
-        await api.ArrangeAsync(tree, cancellationToken);
-
-        using var response = await ApplyAsync(
-            api,
-            new ApplyRequest([], [], [new NodeDelete(alpha.Id, alpha.Version)]),
-            cancellationToken);
-
-        var problem = await AssertValidationProblemAsync(response, cancellationToken);
-        Assert.Equal(["deletes"], problem.Errors.Keys);
-    }
-
-    [Fact]
     public async Task Empty_request_applies_nothing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

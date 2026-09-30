@@ -12,7 +12,7 @@ namespace TreeEditor.Api.Apply;
 /// Apply: every pending change of a local cache in one all-or-nothing transaction.
 /// Steps: validate the request (400), derive the touched roots from the stored ancestors, <c>BEGIN</c>,
 /// check every change against the database and collect the conflicts (409), then write inserts, edits and
-/// deletes in that order and <c>COMMIT</c>. Deletes are not supported yet.
+/// deletes in that order and <c>COMMIT</c>.
 /// </summary>
 public static class ApplyEndpoints
 {
@@ -27,10 +27,11 @@ public static class ApplyEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .WithSummary("Apply changes")
             .WithDescription(
-                "Applies inserts, edits and deletes in one transaction; deletes are not supported yet. " +
+                "Applies inserts, edits and deletes in one transaction. " +
                 "An insert applies when its parent exists and isn't deleted; the parent may be another insert of the " +
-                "same request, and the ancestors are computed from the parent. An edit applies when its version still " +
-                "matches and the element isn't deleted. Values are trimmed; a value colliding with a live sibling " +
+                "same request, and the ancestors are computed from the parent. An edit or delete applies when its " +
+                "version still matches and the element isn't deleted. A delete marks the element and its whole subtree " +
+                "deleted, after the inserts and edits. Values are trimmed; a value colliding with a live sibling " +
                 "(case-insensitive) gets the first free \" (n)\" suffix. Returns every changed element's final value, " +
                 "new version and deleted flag. An invalid value, an id used twice or an insert id that already exists " +
                 "is a 400 problem; changes made elsewhere are a 409 problem listing every conflicting element under " +
@@ -46,7 +47,7 @@ public static class ApplyEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var errors = Validate(request, out var inserts, out var edits);
+        var errors = Validate(request, out var inserts, out var edits, out var deletes);
         if (errors.Count > 0)
         {
             return TypedResults.ValidationProblem(errors, title: "The changes are invalid; nothing was applied.");
@@ -61,11 +62,15 @@ public static class ApplyEndpoints
             .ToArray();
 
         // An element's root never changes, so the touched roots can be read before the transaction.
-        var roots = await TouchedRootsAsync(db, [.. storedParentIds, .. edits.Select(edit => edit.Id)], cancellationToken);
+        var roots = await TouchedRootsAsync(
+            db,
+            [.. storedParentIds, .. edits.Select(edit => edit.Id), .. deletes.Select(delete => delete.Id)],
+            cancellationToken);
         loggerFactory.CreateLogger(typeof(ApplyEndpoints)).LogInformation(
-            "Applying {InsertCount} inserts and {EditCount} edits in {RootCount} root trees",
+            "Applying {InsertCount} inserts, {EditCount} edits and {DeleteCount} deletes in {RootCount} root trees",
             inserts.Count,
             edits.Count,
+            deletes.Count,
             roots.Count);
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
@@ -90,16 +95,17 @@ public static class ApplyEndpoints
             .Where(n => storedParentIds.Contains(n.Id))
             .ToDictionaryAsync(n => n.Id, cancellationToken);
 
-        var editIds = edits.Select(edit => edit.Id).ToArray();
+        var changedIds = edits.Select(edit => edit.Id).Concat(deletes.Select(delete => delete.Id)).ToArray();
         var nodes = await db.Nodes
-            .Where(n => editIds.Contains(n.Id))
+            .Where(n => changedIds.Contains(n.Id))
             .ToDictionaryAsync(n => n.Id, cancellationToken);
 
         var conflicts = storedParentIds
             .Select(parentId => ParentConflict(parentId, parents.GetValueOrDefault(parentId)))
             .Concat(edits.Select(edit => EditConflict(edit, nodes.GetValueOrDefault(edit.Id))))
+            .Concat(deletes.Select(delete => DeleteConflict(delete, nodes.GetValueOrDefault(delete.Id))))
             .OfType<NodeConflict>()
-            // A deleted parent that is also edited is listed once.
+            // A deleted parent that is also edited or deleted is listed once.
             .Distinct()
             .ToList();
         if (conflicts.Count > 0)
@@ -112,7 +118,7 @@ public static class ApplyEndpoints
                 extensions: new Dictionary<string, object?> { [ApplyProblem.ConflictsMember] = conflicts });
         }
 
-        var applied = new List<AppliedNode>(inserts.Count + edits.Count);
+        var applied = new List<AppliedNode>(inserts.Count + edits.Count + deletes.Count);
         var inserted = new Dictionary<Guid, Node>(inserts.Count);
         foreach (var insert in inserts)
         {
@@ -143,6 +149,12 @@ public static class ApplyEndpoints
             applied.Add(new AppliedNode(node.Id, node.Value, node.Version, node.IsDeleted));
         }
 
+        if (deletes.Count > 0)
+        {
+            await DeleteSubtreesAsync(db, deletes, cancellationToken);
+            applied = await AppliedAfterDeletesAsync(db, applied, deletes, cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
         // Only after the commit: invalidating earlier would let a read store the old data again.
         await readCache.InvalidateAsync(roots, applied.Select(node => node.Id));
@@ -150,24 +162,19 @@ public static class ApplyEndpoints
     }
 
     /// <summary>
-    /// Request-level rules, checked before touching the database: valid values, each id at most once, and new
-    /// parents that lead to a stored element. On success, <paramref name="inserts"/> are ordered parents first and
-    /// both lists carry normalised values.
+    /// Request-level rules, checked before touching the database: valid values, each id at most once across inserts,
+    /// edits and deletes, and new parents that lead to a stored element. On success, <paramref name="inserts"/> are
+    /// ordered parents first, and inserts and edits carry normalised values.
     /// </summary>
     private static Dictionary<string, string[]> Validate(
         ApplyRequest request,
         out List<NodeInsert> inserts,
-        out List<NodeEdit> edits)
+        out List<NodeEdit> edits,
+        out List<NodeDelete> deletes)
     {
         var errors = new Dictionary<string, string[]>();
-        var deletes = request.Deletes ?? [];
         edits = [];
-
-        // Deletes come with ticket #8; until then they are refused rather than ignored.
-        if (deletes.Count > 0)
-        {
-            errors["deletes"] = ["Deletes are not supported yet."];
-        }
+        deletes = [];
 
         var ids = new HashSet<Guid>();
         inserts = ValidateInserts(request.Inserts ?? [], ids, errors);
@@ -194,6 +201,24 @@ public static class ApplyEndpoints
             {
                 errors[$"edits[{i}].value"] = [error];
             }
+        }
+
+        var requestDeletes = request.Deletes ?? [];
+        for (var i = 0; i < requestDeletes.Count; i++)
+        {
+            var delete = requestDeletes[i];
+            if (delete is null)
+            {
+                errors[$"deletes[{i}]"] = ["A delete is required."];
+                continue;
+            }
+
+            if (!ids.Add(delete.Id))
+            {
+                errors[$"deletes[{i}].id"] = [$"The id {delete.Id} appears more than once in the request."];
+            }
+
+            deletes.Add(delete);
         }
 
         return errors;
@@ -297,15 +322,57 @@ public static class ApplyEndpoints
     };
 
     /// <summary>Why the edit can't be applied, with the database's current state; null when it can.</summary>
-    private static NodeConflict? EditConflict(NodeEdit edit, Node? node) => node switch
+    private static NodeConflict? EditConflict(NodeEdit edit, Node? node) => VersionConflict(edit.Id, edit.Version, node);
+
+    /// <summary>Why the delete can't be applied, with the database's current state; null when it can.</summary>
+    private static NodeConflict? DeleteConflict(NodeDelete delete, Node? node) => VersionConflict(delete.Id, delete.Version, node);
+
+    /// <summary>Edits and deletes conflict alike: the element is gone or deleted, or its version changed.</summary>
+    private static NodeConflict? VersionConflict(Guid id, uint version, Node? node) => node switch
     {
         // No longer exists at all: treated as deleted in the database.
-        null => new NodeConflict(edit.Id, ConflictReason.Deleted, Value: null, Version: null, IsDeleted: true),
+        null => new NodeConflict(id, ConflictReason.Deleted, Value: null, Version: null, IsDeleted: true),
         { IsDeleted: true } => new NodeConflict(node.Id, ConflictReason.Deleted, node.Value, node.Version, IsDeleted: true),
-        _ when node.Version != edit.Version =>
+        _ when node.Version != version =>
             new NodeConflict(node.Id, ConflictReason.VersionChanged, node.Value, node.Version, IsDeleted: false),
         _ => null,
     };
+
+    /// <summary>
+    /// Marks each deleted element and its whole subtree deleted, descendants never loaded anywhere included:
+    /// one statement per delete, selecting the subtree with <c>ancestors @&gt; ARRAY[id]</c> on the GIN index.
+    /// Rows already deleted are left alone, so their version stays.
+    /// </summary>
+    private static async Task DeleteSubtreesAsync(
+        TreeDbContext db,
+        List<NodeDelete> deletes,
+        CancellationToken cancellationToken)
+    {
+        foreach (var id in deletes.Select(delete => delete.Id))
+        {
+            await db.Nodes
+                .Where(n => n.Ancestors.Contains(id) && !n.IsDeleted)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(n => n.IsDeleted, true), cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The response after deletes: the inserted and edited elements, then the deleted ones in request order, re-read
+    /// because a cascade bypasses the change tracker and may have covered an inserted or edited element too.
+    /// </summary>
+    private static async Task<List<AppliedNode>> AppliedAfterDeletesAsync(
+        TreeDbContext db,
+        List<AppliedNode> written,
+        List<NodeDelete> deletes,
+        CancellationToken cancellationToken)
+    {
+        var ids = written.Select(node => node.Id).Concat(deletes.Select(delete => delete.Id)).ToArray();
+        var final = await db.Nodes
+            .AsNoTracking()
+            .Where(n => ids.Contains(n.Id))
+            .ToDictionaryAsync(n => n.Id, cancellationToken);
+        return [.. ids.Select(id => final[id]).Select(node => new AppliedNode(node.Id, node.Value, node.Version, node.IsDeleted))];
+    }
 
     /// <summary>
     /// The first suffix candidate no live sibling of <paramref name="node"/> holds (roots are siblings of each other),
