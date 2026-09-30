@@ -33,11 +33,8 @@
     <PackageVersion Include="Scalar.AspNetCore" Version="2.17.12" />
   </ItemGroup>
   <ItemGroup Label="Tests">
-    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
-    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
   </ItemGroup>
 </Project>
