@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Scalar.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TreeEditor.Contracts\TreeEditor.Contracts.csproj" />
+    <ProjectReference Include="..\TreeEditor.Data\TreeEditor.Data.csproj" />
+    <ProjectReference Include="..\TreeEditor.Domain\TreeEditor.Domain.csproj" />
+    <ProjectReference Include="..\TreeEditor.ServiceDefaults\TreeEditor.ServiceDefaults.csproj" />
+    <!-- Served from the same origin as the API. -->
+    <ProjectReference Include="..\TreeEditor.Web\TreeEditor.Web.csproj" />
+  </ItemGroup>
+
+</Project>
