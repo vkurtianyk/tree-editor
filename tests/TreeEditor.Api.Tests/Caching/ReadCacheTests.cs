@@ -120,6 +120,34 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Lists_and_loads_right_after_an_Apply_deleting_show_the_element_and_its_descendants_deleted()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var home = tree.Root("Home");
+        var kitchen = tree.Child(home, "Kitchen");
+        tree.Child(kitchen, "Knife");
+        var spoon = tree.Child(kitchen, "Spoon");
+        var ladle = tree.Child(spoon, "Ladle");
+        await api.ArrangeAsync(tree, cancellationToken);
+        Assert.Equal(
+            [("Knife", false), ("Spoon", false)],
+            Items(await ListAsync(api, kitchen.Id, after: null, cancellationToken)));
+        Assert.Equal([("Ladle", false)], Items(await ListAsync(api, spoon.Id, after: null, cancellationToken)));
+        Assert.False((await LoadAsync(api, ladle.Id, cancellationToken)).IsDeleted);
+
+        await ApplyAsync(api, new ApplyRequest([], [], [new NodeDelete(spoon.Id, spoon.Version)]), cancellationToken);
+
+        // Deleted children stay listed, marked deleted; the cascade reaches the cached reads of descendants too.
+        Assert.Equal(
+            [("Knife", false), ("Spoon", true)],
+            Items(await ListAsync(api, kitchen.Id, after: null, cancellationToken)));
+        Assert.Equal([("Ladle", true)], Items(await ListAsync(api, spoon.Id, after: null, cancellationToken)));
+        Assert.True((await LoadAsync(api, ladle.Id, cancellationToken)).IsDeleted);
+    }
+
+    [Fact]
     public async Task Roots_list_and_load_right_after_an_Apply_renaming_a_root_return_the_new_value_and_version()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -190,6 +218,9 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
     }
 
     private static string[] Values(ChildrenPage page) => [.. page.Items.Select(item => item.Value)];
+
+    private static (string Value, bool IsDeleted)[] Items(ChildrenPage page) =>
+        [.. page.Items.Select(item => (item.Value, item.IsDeleted))];
 
     private static async Task<ChildrenPage> ListAsync(
         ApiHarness api, Guid? parentId, ChildrenCursor? after, CancellationToken cancellationToken)
