@@ -1,5 +1,7 @@
+using System.Net;
 using TreeEditor.Contracts;
 using TreeEditor.Domain;
+using TreeEditor.Web.Api;
 
 namespace TreeEditor.Web.Cache;
 
@@ -19,7 +21,18 @@ public sealed class LocalCache(ICacheApiClient api)
     /// <summary>An Apply request is in flight. Only one is sent at a time; changes and discard wait for it.</summary>
     public bool IsApplying => state.IsApplying;
 
-    public bool CanApply => HasPendingChanges && !IsApplying;
+    /// <summary>
+    /// Apply waits for every conflict to be resolved with <see cref="TakeDatabase"/> or <see cref="KeepMine"/>.
+    /// </summary>
+    public bool CanApply => HasPendingChanges && !IsApplying && !HasUnresolvedConflicts;
+
+    public bool HasUnresolvedConflicts => state.ConflictIds.Count > 0;
+
+    /// <summary>
+    /// The elements whose pending change the last Apply found in conflict with the database, in the order the server
+    /// listed them; each carries its <see cref="CachedElement.Conflict"/>.
+    /// </summary>
+    public IReadOnlyList<CachedElement> UnresolvedConflicts => [.. state.ConflictIds.Select(id => state.Elements[id])];
 
     /// <summary>
     /// The cached elements in their hierarchy. Each element hangs under its nearest cached ancestor; ancestors
@@ -82,6 +95,8 @@ public sealed class LocalCache(ICacheApiClient api)
         {
             throw new InvalidOperationException($"The element {id} is deleted and can't be edited.");
         }
+
+        ThrowIfConflicting(element);
 
         if (!ElementValue.TryNormalize(value, out var normalized, out var error))
         {
@@ -163,7 +178,7 @@ public sealed class LocalCache(ICacheApiClient api)
     /// Deletes an element locally with every cached descendant, found by ancestors, so also below placeholders;
     /// nothing is sent until <see cref="ApplyAsync"/>. Their pending edits are dropped: they show their loaded values.
     /// Elements added locally are removed, as they never reached the database; descendants already deleted there
-    /// stay as they are.
+    /// stay as they are. Conflicts of descendants are resolved by the delete: their changes are dropped or covered.
     /// </summary>
     public void Delete(Guid id)
     {
@@ -182,6 +197,8 @@ public sealed class LocalCache(ICacheApiClient api)
             throw new InvalidOperationException($"The element {id} is already deleted.");
         }
 
+        ThrowIfConflicting(element);
+
         var subtree = state.Elements.Values
             .Where(member => member.Id == id || Ancestry.IsDescendantOf(member.Ancestors, id))
             .ToList();
@@ -196,6 +213,12 @@ public sealed class LocalCache(ICacheApiClient api)
             {
                 MarkPendingDeleted(member);
             }
+            else if (member.Conflict is not null)
+            {
+                // A conflicting pending delete below isn't sent any more: this delete covers it.
+                state.Elements[member.Id] = member with { Conflict = null };
+                state.ConflictIds.Remove(member.Id);
+            }
         }
 
         state.ViewTree = null;
@@ -204,7 +227,8 @@ public sealed class LocalCache(ICacheApiClient api)
 
     /// <summary>
     /// Drops every pending change: changed and deleted elements go back to their loaded state, new elements are
-    /// removed, and clean elements stay cached. Nothing is sent to the server.
+    /// removed, and clean elements stay cached. A conflicting element takes the database copy from its conflict
+    /// instead, as the loaded one is known to be stale. Nothing is sent to the server.
     /// </summary>
     public void DiscardAll()
     {
@@ -220,7 +244,9 @@ public sealed class LocalCache(ICacheApiClient api)
 
         foreach (var (id, original) in state.Originals)
         {
-            state.Elements[id] = original;
+            state.Elements[id] = state.Elements[id].Conflict is { } conflict
+                ? DatabaseCopy(original, conflict)
+                : original;
         }
 
         foreach (var id in state.NewIds)
@@ -230,6 +256,7 @@ public sealed class LocalCache(ICacheApiClient api)
 
         state.Originals.Clear();
         state.NewIds.Clear();
+        state.ConflictIds.Clear();
         state.ViewTree = null;
         Changed?.Invoke();
     }
@@ -239,8 +266,13 @@ public sealed class LocalCache(ICacheApiClient api)
     /// and delete with the version it was loaded with. Only the topmost deletes go: the server's cascade covers their
     /// descendants. On success the final values and versions are stored, new elements keep their ids, and nothing is
     /// pending any more. On an error everything stays pending and the error propagates.
-    /// Does nothing when <see cref="CanApply"/> is false. A response that arrives after <see cref="Clear"/> stores
-    /// nothing: the elements it was for are gone.
+    /// On a conflict (an <see cref="ApplyRejectedException"/> with 409) the conflicts are stored before it
+    /// propagates: an element deleted in the database is deleted here too, with its cached descendants, and its
+    /// pending change is dropped; every other conflicting element keeps its change and carries the
+    /// <see cref="CachedElement.Conflict"/> until <see cref="TakeDatabase"/> or <see cref="KeepMine"/> resolves it.
+    /// Nothing is sent again by itself.
+    /// Does nothing when <see cref="CanApply"/> is false. A response or conflict that arrives after
+    /// <see cref="Clear"/> stores nothing: the elements it was for are gone.
     /// </summary>
     public async Task ApplyAsync(CancellationToken cancellationToken = default)
     {
@@ -276,11 +308,76 @@ public sealed class LocalCache(ICacheApiClient api)
                 StoreApplied(response);
             }
         }
+        catch (ApplyRejectedException rejected) when (rejected.StatusCode == HttpStatusCode.Conflict)
+        {
+            if (applyingIn == state)
+            {
+                StoreConflicts(rejected.Conflicts);
+            }
+
+            throw;
+        }
         finally
         {
             applyingIn.IsApplying = false;
             Changed?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Resolves a conflict in favour of the database: the element takes the database's value and version, and its
+    /// pending change is dropped. For a pending delete, the cached descendants deleted with it come back too.
+    /// </summary>
+    public void TakeDatabase(Guid id)
+    {
+        var (element, conflict) = ConflictOf(id);
+        var loaded = state.Originals[id];
+        state.Originals.Remove(id);
+        state.ConflictIds.Remove(id);
+        state.Elements[id] = DatabaseCopy(loaded, conflict);
+
+        if (element.State == ElementState.Deleted)
+        {
+            var deletedWithIt = state.Elements.Values
+                .Where(member => member.State == ElementState.Deleted && Ancestry.IsDescendantOf(member.Ancestors, id))
+                .ToList();
+            foreach (var member in deletedWithIt)
+            {
+                state.Elements[member.Id] = state.Originals[member.Id];
+                state.Originals.Remove(member.Id);
+            }
+        }
+
+        state.ViewTree = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Resolves a conflict in favour of the pending change: it stays, now based on the database's version, so the
+    /// next Apply overwrites the other change. The database copy becomes the one <see cref="DiscardAll"/> goes back
+    /// to. An edit whose value the database already holds leaves nothing pending.
+    /// </summary>
+    public void KeepMine(Guid id)
+    {
+        var (element, conflict) = ConflictOf(id);
+        var database = DatabaseCopy(state.Originals[id], conflict);
+        state.ConflictIds.Remove(id);
+
+        if (element.State == ElementState.Edited && element.Value == database.Value)
+        {
+            state.Originals.Remove(id);
+            state.Elements[id] = database;
+        }
+        else
+        {
+            state.Originals[id] = database;
+            state.Elements[id] = element.State == ElementState.Deleted
+                ? database with { IsDeleted = true, State = ElementState.Deleted }
+                : element with { Version = database.Version, Conflict = null };
+        }
+
+        state.ViewTree = null;
+        Changed?.Invoke();
     }
 
     /// <summary>
@@ -333,12 +430,117 @@ public sealed class LocalCache(ICacheApiClient api)
         state.ViewTree = null;
     }
 
-    /// <summary>Records a pending delete: the loaded copy is kept, and any pending edit is dropped.</summary>
+    /// <summary>
+    /// Stores an Apply's conflicts. Deleted ones first: the element is deleted in the database, so its pending change
+    /// can't apply. It becomes deleted with the database's value and version (the loaded ones when it's missing
+    /// entirely), and its cached descendants are deleted with it: new ones are removed, the others drop their pending
+    /// changes and conflicts. Every other conflicting element that still carries a pending change is flagged.
+    /// </summary>
+    private void StoreConflicts(IReadOnlyList<NodeConflict> conflicts)
+    {
+        foreach (var conflict in conflicts.Where(conflict => conflict.Reason == ConflictReason.Deleted))
+        {
+            if (state.Elements.TryGetValue(conflict.Id, out var element) && element.State != ElementState.New)
+            {
+                StoreDeletedInDatabase(element, conflict);
+            }
+        }
+
+        foreach (var conflict in conflicts.Where(conflict => conflict.Reason != ConflictReason.Deleted))
+        {
+            if (state.Elements.TryGetValue(conflict.Id, out var element)
+                && (element.State is ElementState.Edited or ElementState.Deleted)
+                && element.Conflict is null)
+            {
+                state.Elements[conflict.Id] = element with { Conflict = conflict };
+                state.ConflictIds.Add(conflict.Id);
+            }
+        }
+
+        state.ViewTree = null;
+    }
+
+    private void StoreDeletedInDatabase(CachedElement element, NodeConflict conflict)
+    {
+        var loaded = state.Originals.GetValueOrDefault(element.Id, element);
+        state.Elements[element.Id] = loaded with
+        {
+            Value = conflict.Value ?? loaded.Value,
+            Version = conflict.Version ?? loaded.Version,
+            IsDeleted = true,
+            State = ElementState.Clean,
+            Conflict = null,
+        };
+        state.Originals.Remove(element.Id);
+        state.ConflictIds.Remove(element.Id);
+
+        var descendants = state.Elements.Values
+            .Where(member => Ancestry.IsDescendantOf(member.Ancestors, element.Id))
+            .ToList();
+        foreach (var descendant in descendants)
+        {
+            if (descendant.State == ElementState.New)
+            {
+                state.Elements.Remove(descendant.Id);
+                state.NewIds.Remove(descendant.Id);
+                continue;
+            }
+
+            state.Elements[descendant.Id] = state.Originals.GetValueOrDefault(descendant.Id, descendant) with
+            {
+                IsDeleted = true,
+                State = ElementState.Clean,
+                Conflict = null,
+            };
+            state.Originals.Remove(descendant.Id);
+            state.ConflictIds.Remove(descendant.Id);
+        }
+    }
+
+    /// <summary>The element with the id and its conflict, for resolving it.</summary>
+    private (CachedElement Element, NodeConflict Conflict) ConflictOf(Guid id)
+    {
+        if (IsApplying)
+        {
+            throw new InvalidOperationException("Conflicts can't be resolved while an Apply is in flight.");
+        }
+
+        if (!state.Elements.TryGetValue(id, out var element))
+        {
+            throw new InvalidOperationException($"The element {id} isn't cached.");
+        }
+
+        return element.Conflict is { } conflict
+            ? (element, conflict)
+            : throw new InvalidOperationException($"The element {id} has no conflict to resolve.");
+    }
+
+    /// <summary>The loaded copy with the database's value and version from a version conflict, live and clean.</summary>
+    private static CachedElement DatabaseCopy(CachedElement loaded, NodeConflict conflict) => loaded with
+    {
+        Value = conflict.Value ?? loaded.Value,
+        Version = conflict.Version ?? loaded.Version,
+        IsDeleted = false,
+        State = ElementState.Clean,
+        Conflict = null,
+    };
+
+    private static void ThrowIfConflicting(CachedElement element)
+    {
+        if (element.Conflict is not null)
+        {
+            throw new InvalidOperationException(
+                $"The element {element.Id} conflicts with the database; take the database copy or keep yours first.");
+        }
+    }
+
+    /// <summary>Records a pending delete: the loaded copy is kept, and any pending edit and its conflict are dropped.</summary>
     private void MarkPendingDeleted(CachedElement element)
     {
         var loaded = state.Originals.GetValueOrDefault(element.Id, element);
         state.Originals.TryAdd(element.Id, loaded);
         state.Elements[element.Id] = loaded with { IsDeleted = true, State = ElementState.Deleted };
+        state.ConflictIds.Remove(element.Id);
     }
 
     private bool HasPendingDeletedAncestor(CachedElement element) =>
@@ -407,6 +609,12 @@ public sealed class LocalCache(ICacheApiClient api)
 
         /// <summary>Elements created locally that wait to be inserted, in creation order, so parents come first.</summary>
         public List<Guid> NewIds { get; } = [];
+
+        /// <summary>
+        /// The elements whose <see cref="CachedElement.Conflict"/> is set, in the order the server listed them.
+        /// Apply waits until it's empty.
+        /// </summary>
+        public List<Guid> ConflictIds { get; } = [];
 
         /// <summary>An Apply request is in flight for these elements.</summary>
         public bool IsApplying { get; set; }

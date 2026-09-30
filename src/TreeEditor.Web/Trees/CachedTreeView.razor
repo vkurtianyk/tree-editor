@@ -1,6 +1,7 @@
 @* The local cache's elements in their hierarchy. Ancestors that aren't cached show as placeholder rows;
    only real elements can be selected. The selected live element's value can be edited, a child added under it, or
-   it can be deleted with its subtree; changes stay local until Apply. *@
+   it can be deleted with its subtree; changes stay local until Apply. After an Apply rejected with conflicts, each
+   conflicting element is resolved with Take DB or Keep mine before it can be edited or deleted again. *@
 @using TreeEditor.Domain
 @implements IDisposable
 @inject LocalCache Cache
@@ -12,7 +13,7 @@
         Edit
     </MudButton>
     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-               StartIcon="@Icons.Material.Filled.Add" Disabled="@(!CanEdit)" OnClick="StartAddChild">
+               StartIcon="@Icons.Material.Filled.Add" Disabled="@(!CanAddChild)" OnClick="StartAddChild">
         Add child
     </MudButton>
     <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
@@ -20,6 +21,14 @@
         Delete
     </MudButton>
 </div>
+
+@if (Cache.HasUnresolvedConflicts)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="tree-conflicts">
+        @Cache.UnresolvedConflicts.Count element(s) changed in the database after they were loaded. Resolve each with
+        Take DB or Keep mine, then Apply again.
+    </MudAlert>
+}
 
 @if (Editing is { } element)
 {
@@ -44,7 +53,8 @@
             The cache is empty. Select an element in the database tree and load it into the cache.
         </MudText>
     }
-    <CachedTreeRowsView Rows="Cache.ViewTree" SelectedId="SelectedId" OnSelect="Select" />
+    <CachedTreeRowsView Rows="Cache.ViewTree" SelectedId="SelectedId" OnSelect="Select"
+                        OnTakeDatabase="TakeDatabase" OnKeepMine="KeepMine" />
 </div>
 
 @code {
@@ -60,12 +70,19 @@
 
     private CachedElement? Selected => SelectedId is { } id ? Cache.Find(id) : null;
 
-    private bool CanEdit => Selected is { IsDeleted: false } && !Cache.IsApplying;
+    /// <summary>A conflicting element is resolved first; adding a child under it doesn't touch its change.</summary>
+    private bool CanEdit => Selected is { IsDeleted: false, Conflict: null } && !Cache.IsApplying;
 
-    private bool CanDelete => Selected is { IsDeleted: false } && !Cache.IsApplying;
+    private bool CanAddChild => Selected is { IsDeleted: false } && !Cache.IsApplying;
 
-    /// <summary>The element being edited, while it is still selected, cached and live.</summary>
-    private CachedElement? Editing => editingId == SelectedId && Selected is { IsDeleted: false } element
+    private bool CanDelete => Selected is { IsDeleted: false, Conflict: null } && !Cache.IsApplying;
+
+    /// <summary>
+    /// The element being edited, while it is still selected, cached and live, and its value still editable.
+    /// </summary>
+    private CachedElement? Editing => editingId == SelectedId
+        && Selected is { IsDeleted: false } element
+        && (addingChild || element.Conflict is null)
         ? element
         : null;
 
@@ -85,7 +102,7 @@
 
     private void StartEdit()
     {
-        if (Selected is not { IsDeleted: false } element)
+        if (!CanEdit || Selected is not { } element)
         {
             return;
         }
@@ -172,6 +189,22 @@
 
         CancelEdit();
         Cache.Delete(element.Id);
+    }
+
+    private void TakeDatabase(Guid id)
+    {
+        if (!Cache.IsApplying)
+        {
+            Cache.TakeDatabase(id);
+        }
+    }
+
+    private void KeepMine(Guid id)
+    {
+        if (!Cache.IsApplying)
+        {
+            Cache.KeepMine(id);
+        }
     }
 
     private void OnEditorKeyDown(KeyboardEventArgs args)

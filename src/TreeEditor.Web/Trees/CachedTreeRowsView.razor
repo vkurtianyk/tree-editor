@@ -1,4 +1,5 @@
-@* One level of CachedTreeView: element rows (selectable) and placeholder rows (not), each followed by its children. *@
+@* One level of CachedTreeView: element rows (selectable) and placeholder rows (not), each followed by its children.
+   An element whose change conflicts with the database shows the database's value and Take DB / Keep mine. *@
 
 @foreach (var row in Rows)
 {
@@ -20,6 +21,21 @@
                     @if (element.State == ElementState.Deleted)
                     {
                         <span class="tree-marker deleted" title="Deleted; not applied yet">deleted</span>
+                    }
+                    @if (element.Conflict is { } conflict)
+                    {
+                        <span class="tree-marker conflict" title="@ConflictTitle(element, conflict)">changed elsewhere</span>
+                        <span class="tree-conflict-value">database: "@conflict.Value"</span>
+                        <MudButton Class="tree-conflict-action" Variant="Variant.Outlined" Color="Color.Warning"
+                                   Size="Size.Small" title="Take the database's value and drop your change"
+                                   OnClick="() => OnTakeDatabase.InvokeAsync(element.Id)">
+                            Take DB
+                        </MudButton>
+                        <MudButton Class="tree-conflict-action" Variant="Variant.Outlined" Color="Color.Warning"
+                                   Size="Size.Small" title="Keep your change; the next Apply overwrites the database's"
+                                   OnClick="() => OnKeepMine.InvokeAsync(element.Id)">
+                            Keep mine
+                        </MudButton>
                     }
                 </div>
                 @ChildrenOf(row)
@@ -48,6 +64,16 @@
     [Parameter]
     public EventCallback<Guid> OnSelect { get; set; }
 
+    [Parameter]
+    public EventCallback<Guid> OnTakeDatabase { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnKeepMine { get; set; }
+
+    private static string ConflictTitle(CachedElement element, NodeConflict conflict) =>
+        $"Changed in the database after it was loaded; it is now \"{conflict.Value}\"."
+        + (element.State == ElementState.Deleted ? " Keep mine deletes it anyway." : " Keep mine applies your value.");
+
     private string ValueClass(CachedElement element) =>
         "tree-value selectable"
         + (element.IsDeleted ? " deleted" : "")
@@ -57,6 +83,7 @@
     private RenderFragment? ChildrenOf(CachedTreeRow row) => row.Children.Count == 0
         ? null
         : @<div role="group" class="tree-group">
-               <CachedTreeRowsView Rows="row.Children" SelectedId="SelectedId" OnSelect="OnSelect" />
+               <CachedTreeRowsView Rows="row.Children" SelectedId="SelectedId" OnSelect="OnSelect"
+                                   OnTakeDatabase="OnTakeDatabase" OnKeepMine="OnKeepMine" />
            </div>;
 }
