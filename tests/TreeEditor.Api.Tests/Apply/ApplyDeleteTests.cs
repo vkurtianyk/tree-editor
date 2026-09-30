@@ -189,6 +189,57 @@ public sealed class ApplyDeleteTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Insert_under_one_element_and_delete_of_a_sibling_subtree_in_one_request_applies()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var root = tree.Root("Root");
+        var alpha = tree.Child(root, "Alpha");
+        var beta = tree.Child(root, "Beta");
+        var betaChild = tree.Child(beta, "Beta child");
+        await api.ArrangeAsync(tree, cancellationToken);
+        var kid = Guid.CreateVersion7();
+
+        var applied = await ApplyOkAsync(
+            api,
+            new ApplyRequest([new NodeInsert(kid, alpha.Id, "Kid")], [], [new NodeDelete(beta.Id, beta.Version)]),
+            cancellationToken);
+
+        Assert.Equal([(kid, "Kid", false), (beta.Id, "Beta", true)], applied.Nodes.Select(node => (node.Id, node.Value, node.IsDeleted)));
+        Assert.Equal([("Kid", false)], await ListAsync(api, alpha.Id, cancellationToken));
+        Assert.True((await LoadAsync(api, betaChild.Id, cancellationToken)).IsDeleted);
+        Assert.Equal([("Alpha", false), ("Beta", true)], await ListAsync(api, root.Id, cancellationToken));
+    }
+
+    [Fact]
+    public async Task Insert_under_an_element_the_same_request_deletes_is_written_and_deleted_with_it()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var root = tree.Root("Root");
+        var alpha = tree.Child(root, "Alpha");
+        await api.ArrangeAsync(tree, cancellationToken);
+        var (kid, grandkid) = (Guid.CreateVersion7(), Guid.CreateVersion7());
+
+        // The parent is live when conflicts are checked; inserts are written before the delete cascade runs.
+        var applied = await ApplyOkAsync(
+            api,
+            new ApplyRequest(
+                [new NodeInsert(kid, alpha.Id, "Kid"), new NodeInsert(grandkid, kid, "Grandkid")],
+                [],
+                [new NodeDelete(alpha.Id, alpha.Version)]),
+            cancellationToken);
+
+        Assert.Equal(
+            [(kid, "Kid", true), (grandkid, "Grandkid", true), (alpha.Id, "Alpha", true)],
+            applied.Nodes.Select(node => (node.Id, node.Value, node.IsDeleted)));
+        Assert.Equal([("Kid", true)], await ListAsync(api, alpha.Id, cancellationToken));
+        Assert.Equal(applied.Nodes[1].Version, (await LoadAsync(api, grandkid, cancellationToken)).Version);
+    }
+
+    [Fact]
     public async Task Editing_and_deleting_the_same_element_is_a_400()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
