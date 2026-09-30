@@ -219,7 +219,29 @@
         }
     }
 
-    private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
+    private async void OnCacheChanged() => await InvokeAsync(() =>
+    {
+        ForgetStale();
+        StateHasChanged();
+    });
+
+    /// <summary>
+    /// Closes the editor once its element can't be edited (a conflict, a delete, a clear) and forgets a selection
+    /// that isn't cached any more, so neither comes back with an old draft when the element does (Take DB, or a load
+    /// after a Reset, which keeps the ids).
+    /// </summary>
+    private void ForgetStale()
+    {
+        if (editingId is not null && Editing is null)
+        {
+            CancelEdit();
+        }
+
+        if (selectedId is { } id && !Cache.IsCached(id))
+        {
+            selectedId = null;
+        }
+    }
 
     public void Dispose() => Cache.Changed -= OnCacheChanged;
 }
