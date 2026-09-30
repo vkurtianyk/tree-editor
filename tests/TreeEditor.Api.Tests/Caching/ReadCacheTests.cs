@@ -57,6 +57,77 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
         Assert.Equal(["Rake"], Values(await ListAsync(api, shed.Id, after: null, cancellationToken)));
     }
 
+    [Fact]
+    public async Task List_and_load_right_after_an_Apply_return_the_new_values_and_versions()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var home = tree.Root("Home");
+        var kitchen = tree.Child(home, "Kitchen");
+        var knife = tree.Child(kitchen, "Knife");
+        await api.ArrangeAsync(tree, cancellationToken);
+        await ListAsync(api, home.Id, after: null, cancellationToken);
+        await ListAsync(api, kitchen.Id, after: null, cancellationToken);
+        await LoadAsync(api, kitchen.Id, cancellationToken);
+        await LoadAsync(api, knife.Id, cancellationToken);
+
+        var applied = await ApplyEditsAsync(
+            api,
+            [new NodeEdit(kitchen.Id, "Pantry", kitchen.Version), new NodeEdit(knife.Id, "Fork", knife.Version)],
+            cancellationToken);
+
+        Assert.Equal(["Pantry"], Values(await ListAsync(api, home.Id, after: null, cancellationToken)));
+        Assert.Equal(["Fork"], Values(await ListAsync(api, kitchen.Id, after: null, cancellationToken)));
+        foreach (var node in applied.Nodes)
+        {
+            var loaded = await LoadAsync(api, node.Id, cancellationToken);
+            Assert.Equal(node.Value, loaded.Value);
+            Assert.Equal(node.Version, loaded.Version);
+        }
+    }
+
+    [Fact]
+    public async Task Roots_list_and_load_right_after_an_Apply_renaming_a_root_return_the_new_value_and_version()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var home = tree.Root("Home");
+        tree.Root("Garden");
+        await api.ArrangeAsync(tree, cancellationToken);
+        await ListAsync(api, parentId: null, after: null, cancellationToken);
+        await LoadAsync(api, home.Id, cancellationToken);
+
+        var applied = await ApplyEditsAsync(api, [new NodeEdit(home.Id, "Attic", home.Version)], cancellationToken);
+
+        Assert.Equal(["Attic", "Garden"], Values(await ListAsync(api, parentId: null, after: null, cancellationToken)));
+        var loaded = await LoadAsync(api, home.Id, cancellationToken);
+        Assert.Equal("Attic", loaded.Value);
+        Assert.Equal(Assert.Single(applied.Nodes).Version, loaded.Version);
+    }
+
+    [Fact]
+    public async Task Root_renamed_onto_a_later_roots_page_is_listed_there_right_after_the_Apply()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var roots = Enumerable.Range(0, ChildrenPage.PageSize + 1).Select(i => tree.Root($"Root {i:D3}")).ToList();
+        await api.ArrangeAsync(tree, cancellationToken);
+        var first = await ListAsync(api, parentId: null, after: null, cancellationToken);
+        Assert.Equal(
+            [$"Root {ChildrenPage.PageSize:D3}"],
+            Values(await ListAsync(api, parentId: null, first.Next, cancellationToken)));
+
+        // Moves from the first page to the end of the second, which never listed it before.
+        await ApplyEditsAsync(api, [new NodeEdit(roots[0].Id, "Zulu", roots[0].Version)], cancellationToken);
+
+        Assert.Equal(
+            [$"Root {ChildrenPage.PageSize:D3}", "Zulu"],
+            Values(await ListAsync(api, parentId: null, first.Next, cancellationToken)));
+    }
+
     private static string[] Values(ChildrenPage page) => [.. page.Items.Select(item => item.Value)];
 
     private static async Task<ChildrenPage> ListAsync(
@@ -72,6 +143,16 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
         var node = await api.Client.GetFromJsonAsync<NodeDetails>(ApiRoutes.NodeById(id), cancellationToken);
         Assert.NotNull(node);
         return node;
+    }
+
+    private static async Task<ApplyResponse> ApplyEditsAsync(
+        ApiHarness api, NodeEdit[] edits, CancellationToken cancellationToken)
+    {
+        using var response = await api.Client.PostAsJsonAsync(ApiRoutes.Apply, new ApplyRequest([], edits, []), cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var applied = await response.Content.ReadFromJsonAsync<ApplyResponse>(cancellationToken);
+        Assert.NotNull(applied);
+        return applied;
     }
 
     private static async Task ChangeValueInDatabaseAsync(

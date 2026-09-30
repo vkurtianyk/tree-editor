@@ -80,6 +80,21 @@ public sealed class ReadCache(HybridCache cache)
             },
             cancellationToken);
 
+    /// <summary>
+    /// After an Apply commits: the touched root trees, plus the roots listing when a touched element is a root itself.
+    /// </summary>
+    public ValueTask InvalidateAsync(IReadOnlyCollection<Guid> touchedRoots, IEnumerable<Guid> touchedIds)
+    {
+        List<string> tags = [.. touchedRoots.Select(RootTag)];
+        if (touchedIds.Any(touchedRoots.Contains))
+        {
+            tags.Add(RootsTag);
+        }
+
+        // Not cancellable: the commit has happened, so the stale entries must go even if the request was cancelled.
+        return cache.RemoveByTagAsync(tags, CancellationToken.None);
+    }
+
     private static string RootTag(Guid rootId) => $"root:{rootId}";
 
     private static string ChildrenKey(Guid? parentId, ChildrenCursor? after)
