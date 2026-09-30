@@ -1,6 +1,7 @@
 @* Toolbar Apply and "Discard all changes" for the local cache's pending changes, and the leave-page warning
-   while any are pending. Apply is disabled while nothing is pending or a request is in flight; after it succeeds
-   DBTreeView reloads from the roots. *@
+   while any are pending. Apply is disabled while nothing is pending, a request is in flight or a conflict is
+   unresolved; after it succeeds, or is rejected with conflicts, DBTreeView reloads from the roots. *@
+@using System.Net
 @implements IDisposable
 @inject LocalCache Cache
 @inject DbTreeReload DbTree
@@ -29,10 +30,35 @@
             DbTree.Request();
             Snackbar.Add("The changes are applied.", Severity.Success);
         }
+        catch (ApplyRejectedException rejected) when (rejected.StatusCode == HttpStatusCode.Conflict)
+        {
+            // The database moved on: show it as it is now next to the conflicts CachedTreeView marks.
+            DbTree.Request();
+            Snackbar.Add(ConflictSummary(rejected.Conflicts), Severity.Warning);
+        }
         catch (HttpRequestException ex)
         {
             Snackbar.Add($"Apply failed; the changes are still pending. {ex.Message}", Severity.Error);
         }
+    }
+
+    private string ConflictSummary(IReadOnlyList<NodeConflict> conflicts)
+    {
+        var deleted = conflicts.Count(conflict => conflict.Reason == ConflictReason.Deleted);
+        var summary = $"Nothing was applied: {conflicts.Count} element(s) changed in the database.";
+        if (deleted > 0)
+        {
+            summary += $" {deleted} of them were deleted there, so the changes under them were dropped.";
+        }
+
+        if (Cache.HasUnresolvedConflicts)
+        {
+            return summary + $" Resolve {(deleted > 0 ? "the others" : "each")} with Take DB or Keep mine, then Apply again.";
+        }
+
+        return summary + (Cache.HasPendingChanges
+            ? " Apply again to send the remaining changes."
+            : " No changes are left to apply.");
     }
 
     private async Task ConfirmLeaveAsync(LocationChangingContext context)
