@@ -11,6 +11,7 @@
     <Project Path="src/TreeEditor.Domain/TreeEditor.Domain.csproj" />
     <Project Path="src/TreeEditor.MigrationService/TreeEditor.MigrationService.csproj" />
     <Project Path="src/TreeEditor.ServiceDefaults/TreeEditor.ServiceDefaults.csproj" />
+    <Project Path="src/TreeEditor.Web/TreeEditor.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TreeEditor.Domain.Tests/TreeEditor.Domain.Tests.csproj" />

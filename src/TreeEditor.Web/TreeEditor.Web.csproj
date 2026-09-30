@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <!-- Blazor WebAssembly UI. Not run on its own: the Api serves it from the same origin. -->
+
+  <PropertyGroup>
+    <!-- Rewrites the fingerprint, preload and importmap placeholders in wwwroot/index.html at build. -->
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" />
+    <PackageReference Include="MudBlazor" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TreeEditor.Contracts\TreeEditor.Contracts.csproj" />
+    <ProjectReference Include="..\TreeEditor.Domain\TreeEditor.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

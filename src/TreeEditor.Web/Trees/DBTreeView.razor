@@ -1,0 +1,52 @@
+@* The database tree, read lazily. For now: the roots (first page of list children with no parent). *@
+@inject TreeApiClient Api
+
+<div class="tree" role="tree" aria-label="Database tree">
+    @if (error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    }
+    else if (roots is null)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (roots.Count == 0)
+    {
+        <MudText Typo="Typo.body2">The database is empty.</MudText>
+    }
+    else
+    {
+        @foreach (var node in roots)
+        {
+            <div class="tree-row" role="treeitem" data-node-id="@node.Id" aria-expanded="@(node.HasChildren ? "false" : null)">
+                @if (node.HasChildren)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" />
+                }
+                else
+                {
+                    <span class="tree-expander-spacer"></span>
+                }
+                <span class="@(node.IsDeleted ? "tree-value deleted" : "tree-value")">@node.Value</span>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private IReadOnlyList<NodeListItem>? roots;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var page = await Api.ListChildrenAsync(parentId: null);
+            roots = page.Items;
+        }
+        catch (HttpRequestException ex)
+        {
+            error = $"Could not load the database tree: {ex.Message}";
+        }
+    }
+}
