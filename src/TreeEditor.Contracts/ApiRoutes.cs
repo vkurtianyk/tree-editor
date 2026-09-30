@@ -5,11 +5,16 @@ public static class ApiRoutes
 {
     public const string Nodes = "/api/nodes";
 
+    /// <summary>Load node: one element by id; 404 problem when no element has it.</summary>
+    public const string Node = Nodes + "/{id:guid}";
+
     /// <summary>
     /// List children. Query: <c>parentId</c> (absent = roots), and the keyset cursor
     /// <c>afterValue</c> + <c>afterId</c> (both or neither; absent = first page).
     /// </summary>
     public const string Children = Nodes + "/children";
+
+    public static string NodeById(Guid id) => $"{Nodes}/{id}";
 
     public static string ChildrenOf(Guid? parentId, ChildrenCursor? after = null)
     {

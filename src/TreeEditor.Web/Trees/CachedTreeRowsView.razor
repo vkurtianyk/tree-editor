@@ -1,0 +1,49 @@
+@* One level of CachedTreeView: element rows (selectable) and placeholder rows (not), each followed by its children. *@
+
+@foreach (var row in Rows)
+{
+    @switch (row)
+    {
+        case CachedElementRow { Element: var element }:
+            <div @key="row.Key" role="treeitem" data-node-id="@element.Id"
+                 aria-selected="@(element.Id == SelectedId ? "true" : "false")">
+                <div class="tree-row">
+                    <span class="@ValueClass(element)" @onclick="() => OnSelect.InvokeAsync(element.Id)">@element.Value</span>
+                </div>
+                @ChildrenOf(row)
+            </div>
+            break;
+        case PlaceholderRow placeholder:
+            <div @key="row.Key" role="treeitem" aria-disabled="true">
+                <div class="tree-row">
+                    <span class="tree-placeholder">
+                        … @placeholder.MissingLevels @(placeholder.MissingLevels == 1 ? "level" : "levels") not loaded
+                    </span>
+                </div>
+                @ChildrenOf(row)
+            </div>
+            break;
+    }
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<CachedTreeRow> Rows { get; set; } = null!;
+
+    [Parameter]
+    public Guid? SelectedId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnSelect { get; set; }
+
+    private string ValueClass(CachedElement element) =>
+        "tree-value selectable"
+        + (element.IsDeleted ? " deleted" : "")
+        + (element.Id == SelectedId ? " selected" : "");
+
+    private RenderFragment? ChildrenOf(CachedTreeRow row) => row.Children.Count == 0
+        ? null
+        : @<div role="group" class="tree-group">
+               <CachedTreeRowsView Rows="row.Children" SelectedId="SelectedId" OnSelect="OnSelect" />
+           </div>;
+}

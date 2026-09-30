@@ -44,6 +44,29 @@ public static class Ancestry
             : throw new ArgumentException("An ancestor list contains at least the element itself.", nameof(ancestors));
     }
 
+    /// <summary>
+    /// Whether the element with this ancestor list lies in the subtree below <paramref name="ancestorId"/>:
+    /// the id appears on its path before the element itself. An element is not its own descendant.
+    /// </summary>
+    public static bool IsDescendantOf(IReadOnlyList<Guid> ancestors, Guid ancestorId)
+    {
+        ArgumentNullException.ThrowIfNull(ancestors);
+        if (ancestors.Count == 0)
+        {
+            throw new ArgumentException("An ancestor list contains at least the element itself.", nameof(ancestors));
+        }
+
+        for (var i = 0; i < ancestors.Count - 1; i++)
+        {
+            if (ancestors[i] == ancestorId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void EnsureId(Guid id)
     {
         if (id == Guid.Empty)

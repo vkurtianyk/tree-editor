@@ -20,5 +20,6 @@
     <Project Path="tests/TreeEditor.AppHost.Tests/TreeEditor.AppHost.Tests.csproj" />
     <Project Path="tests/TreeEditor.Domain.Tests/TreeEditor.Domain.Tests.csproj" />
     <Project Path="tests/TreeEditor.MigrationService.Tests/TreeEditor.MigrationService.Tests.csproj" />
+    <Project Path="tests/TreeEditor.Web.Tests/TreeEditor.Web.Tests.csproj" />
   </Folder>
 </Solution>

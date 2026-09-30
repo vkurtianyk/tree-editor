@@ -1,0 +1,29 @@
+@* The local cache's elements in their hierarchy. Ancestors that aren't cached show as placeholder rows;
+   only real elements can be selected. *@
+@implements IDisposable
+@inject LocalCache Cache
+
+<div class="tree" role="tree" aria-label="Cached tree">
+    @if (Cache.ViewTree.Count == 0)
+    {
+        <MudText Typo="Typo.body2">
+            The cache is empty. Select an element in the database tree and load it into the cache.
+        </MudText>
+    }
+    <CachedTreeRowsView Rows="Cache.ViewTree" SelectedId="SelectedId" OnSelect="Select" />
+</div>
+
+@code {
+    private Guid? selectedId;
+
+    /// <summary>The selected element, while it is still cached.</summary>
+    private Guid? SelectedId => selectedId is { } id && Cache.IsCached(id) ? id : null;
+
+    protected override void OnInitialized() => Cache.Changed += OnCacheChanged;
+
+    private void Select(Guid id) => selectedId = id;
+
+    private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Cache.Changed -= OnCacheChanged;
+}
