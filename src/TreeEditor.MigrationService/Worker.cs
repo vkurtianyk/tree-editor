@@ -51,7 +51,7 @@ public sealed class Worker(
 
             if (!await db.SeedNodes.AnyAsync(cancellationToken))
             {
-                var rows = SampleTree.Rows;
+                var rows = SampleTree.Generate(SampleTree.DefaultSize);
                 await SeedNodeWriter.CopyAsync(db, rows, cancellationToken);
                 logger.LogInformation("Wrote {Count} sample elements to seed_nodes", rows.Count);
             }
