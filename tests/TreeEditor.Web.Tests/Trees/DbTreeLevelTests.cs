@@ -28,6 +28,26 @@ public sealed class DbTreeLevelTests
         Assert.False(level.HasMore);
     }
 
+    [Fact]
+    public async Task Failed_first_page_can_be_retried()
+    {
+        var api = Api(
+            () => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            Page(new ChildrenPage([Alpha], HasMore: false, Next: null)));
+        var level = new DbTreeLevel(parentId: null);
+
+        await level.LoadNextPageAsync(api, TestContext.Current.CancellationToken);
+
+        Assert.True(level.FirstPageFailed);
+        Assert.NotNull(level.Error);
+
+        await level.LoadNextPageAsync(api, TestContext.Current.CancellationToken);
+
+        Assert.False(level.FirstPageFailed);
+        Assert.Null(level.Error);
+        Assert.Equal([Alpha], level.Nodes.Select(node => node.Item));
+    }
+
     private static NodeListItem Item(int id, string value) =>
         new(Guid.Parse($"0199a000-0000-7000-8000-{id:x12}"), value, IsDeleted: false, HasChildren: false);
 

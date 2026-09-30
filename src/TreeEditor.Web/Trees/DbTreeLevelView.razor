@@ -47,6 +47,16 @@ else if (Level.HasMore)
 @if (Level.Error is { } error)
 {
     <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    @if (Level.FirstPageFailed)
+    {
+        <div class="tree-row">
+            <span class="tree-expander-spacer"></span>
+            <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh"
+                       OnClick="LoadNextPageAsync">
+                Retry
+            </MudButton>
+        </div>
+    }
 }
 
 @code {

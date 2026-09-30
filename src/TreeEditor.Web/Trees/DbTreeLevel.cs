@@ -28,6 +28,12 @@ public sealed class DbTreeLevel(Guid? parentId)
     /// <summary>Why the last load failed; cleared by the next load.</summary>
     public string? Error { get; private set; }
 
+    /// <summary>
+    /// The first page failed, so the level has no cursor and no "Load more" to try again with; the view offers a retry.
+    /// A later page that fails keeps its cursor, so "Load more" retries it.
+    /// </summary>
+    public bool FirstPageFailed => !IsLoaded && !IsLoading && Error is not null;
+
     /// <summary>Loads the first page, or appends the next one. Does nothing while a load runs or when all are loaded.</summary>
     public async Task LoadNextPageAsync(TreeApiClient api, CancellationToken cancellationToken = default)
     {
