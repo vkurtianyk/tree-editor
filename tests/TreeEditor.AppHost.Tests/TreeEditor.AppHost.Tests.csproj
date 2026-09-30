@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Starts the whole app through the AppHost (Aspire.Hosting.Testing), the way the reviewer starts it. Needs Docker. -->
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TreeEditor.AppHost\TreeEditor.AppHost.csproj" />
+    <ProjectReference Include="..\..\src\TreeEditor.Contracts\TreeEditor.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Aspire.Hosting.ApplicationModel" />
+    <Using Include="Aspire.Hosting.Testing" />
+  </ItemGroup>
+
+</Project>

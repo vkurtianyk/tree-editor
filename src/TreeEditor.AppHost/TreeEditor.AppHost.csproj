@@ -1,0 +1,20 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.6.0">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <UserSecretsId>tree-editor-apphost</UserSecretsId>
+    <!-- The dashboard and DCP come from NuGet (AspireUseCliBundle=false), so `dotnet run` and the tests
+         work without the Aspire CLI installed; ASPIRE010 only reports that choice. -->
+    <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TreeEditor.Api\TreeEditor.Api.csproj" />
+    <ProjectReference Include="..\TreeEditor.MigrationService\TreeEditor.MigrationService.csproj" />
+  </ItemGroup>
+
+</Project>

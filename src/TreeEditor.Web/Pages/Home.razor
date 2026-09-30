@@ -1,0 +1,20 @@
+@page "/"
+
+<PageTitle>Tree editor</PageTitle>
+
+<h1 class="visually-hidden">Tree editor</h1>
+
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.h6" GutterBottom="true">Database</MudText>
+            <DBTreeView />
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" md="6">
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.h6" GutterBottom="true">Cache</MudText>
+            <CachedTreeView />
+        </MudPaper>
+    </MudItem>
+</MudGrid>

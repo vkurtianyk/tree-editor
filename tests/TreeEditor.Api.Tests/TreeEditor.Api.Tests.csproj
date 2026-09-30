@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The API hosted in-process (WebApplicationFactory) against PostgreSQL in Testcontainers, driven over HTTP. -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TreeEditor.Api\TreeEditor.Api.csproj" />
+    <ProjectReference Include="..\..\src\TreeEditor.Contracts\TreeEditor.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\TreeEditor.Data\TreeEditor.Data.csproj" />
+    <ProjectReference Include="..\..\src\TreeEditor.Domain\TreeEditor.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

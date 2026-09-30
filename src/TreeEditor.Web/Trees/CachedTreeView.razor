@@ -1,0 +1,247 @@
+@* The local cache's elements in their hierarchy. Ancestors that aren't cached show as placeholder rows;
+   only real elements can be selected. The selected live element's value can be edited, a child added under it, or
+   it can be deleted with its subtree; changes stay local until Apply. After an Apply rejected with conflicts, each
+   conflicting element is resolved with Take DB or Keep mine before it can be edited or deleted again. *@
+@using TreeEditor.Domain
+@implements IDisposable
+@inject LocalCache Cache
+@inject ISnackbar Snackbar
+
+<div class="tree-toolbar">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Edit" Disabled="@(!CanEdit)" OnClick="StartEdit">
+        Edit
+    </MudButton>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Add" Disabled="@(!CanAddChild)" OnClick="StartAddChild">
+        Add child
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Delete" Disabled="@(!CanDelete)" OnClick="DeleteSelected">
+        Delete
+    </MudButton>
+</div>
+
+@if (Cache.HasUnresolvedConflicts)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="tree-conflicts">
+        @Cache.UnresolvedConflicts.Count element(s) changed in the database after they were loaded. Resolve each with
+        Take DB or Keep mine, then Apply again.
+    </MudAlert>
+}
+
+@if (Editing is { } element)
+{
+    <div class="tree-editor">
+        <MudTextField T="string" @bind-Value="draft" Label="@(addingChild ? "New child's value" : "Value")"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Immediate="true" AutoFocus="true" Counter="@ElementValue.MaxLength"
+                      Error="@(draft is not null && DraftError is not null)" ErrorText="@DraftError"
+                      OnKeyDown="OnEditorKeyDown" />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   Disabled="@(DraftError is not null || Cache.IsApplying)" OnClick="() => Save(element)">
+            @(addingChild ? "Add" : "Save")
+        </MudButton>
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="CancelEdit">Cancel</MudButton>
+    </div>
+}
+
+<div class="tree" role="tree" aria-label="Cached tree">
+    @if (Cache.ViewTree.Count == 0)
+    {
+        <MudText Typo="Typo.body2">
+            The cache is empty. Select an element in the database tree and load it into the cache.
+        </MudText>
+    }
+    <CachedTreeRowsView Rows="Cache.ViewTree" SelectedId="SelectedId" OnSelect="Select"
+                        OnTakeDatabase="TakeDatabase" OnKeepMine="KeepMine" />
+</div>
+
+@code {
+    private Guid? selectedId;
+    private Guid? editingId;
+    private string? draft;
+
+    /// <summary>The editor names a new child of the element being edited instead of changing its value.</summary>
+    private bool addingChild;
+
+    /// <summary>The selected element, while it is still cached.</summary>
+    private Guid? SelectedId => selectedId is { } id && Cache.IsCached(id) ? id : null;
+
+    private CachedElement? Selected => SelectedId is { } id ? Cache.Find(id) : null;
+
+    /// <summary>A conflicting element is resolved first; adding a child under it doesn't touch its change.</summary>
+    private bool CanEdit => Selected is { IsDeleted: false, Conflict: null } && !Cache.IsApplying;
+
+    private bool CanAddChild => Selected is { IsDeleted: false } && !Cache.IsApplying;
+
+    private bool CanDelete => Selected is { IsDeleted: false, Conflict: null } && !Cache.IsApplying;
+
+    /// <summary>
+    /// The element being edited, while it is still selected, cached and live, and its value still editable.
+    /// </summary>
+    private CachedElement? Editing => editingId == SelectedId
+        && Selected is { IsDeleted: false } element
+        && (addingChild || element.Conflict is null)
+        ? element
+        : null;
+
+    private string? DraftError => ElementValue.Validate(draft);
+
+    protected override void OnInitialized() => Cache.Changed += OnCacheChanged;
+
+    private void Select(Guid id)
+    {
+        if (id != selectedId)
+        {
+            CancelEdit();
+        }
+
+        selectedId = id;
+    }
+
+    private void StartEdit()
+    {
+        if (!CanEdit || Selected is not { } element)
+        {
+            return;
+        }
+
+        editingId = element.Id;
+        draft = element.Value;
+        addingChild = false;
+    }
+
+    private void StartAddChild()
+    {
+        if (Selected is not { IsDeleted: false } element)
+        {
+            return;
+        }
+
+        editingId = element.Id;
+        // No value yet: the field shows no error until something is typed.
+        draft = null;
+        addingChild = true;
+    }
+
+    private void CancelEdit()
+    {
+        editingId = null;
+        draft = null;
+        addingChild = false;
+    }
+
+    private void Save(CachedElement element)
+    {
+        if (Cache.IsApplying)
+        {
+            return;
+        }
+
+        if (addingChild)
+        {
+            AddChild(element);
+            return;
+        }
+
+        var result = Cache.EditValue(element.Id, draft);
+        if (result.Error is not null)
+        {
+            // The field already shows the error; nothing was changed.
+            return;
+        }
+
+        if (result.Value != draft?.Trim())
+        {
+            Snackbar.Add($"A sibling already has that value; it was changed to \"{result.Value}\".", Severity.Info);
+        }
+
+        CancelEdit();
+    }
+
+    private void AddChild(CachedElement parent)
+    {
+        var result = Cache.AddChild(parent.Id, draft);
+        if (result.Error is not null)
+        {
+            // The field already shows the error; nothing was added.
+            return;
+        }
+
+        if (result.Value != draft?.Trim())
+        {
+            Snackbar.Add($"A sibling already has that value; the new element is \"{result.Value}\".", Severity.Info);
+        }
+
+        CancelEdit();
+        // The new element is selected, so it can be renamed or get children of its own at once.
+        selectedId = result.Id;
+    }
+
+    /// <summary>Deletes the selected element with its cached subtree; the delete stays local until Apply.</summary>
+    private void DeleteSelected()
+    {
+        if (!CanDelete || Selected is not { } element)
+        {
+            return;
+        }
+
+        CancelEdit();
+        Cache.Delete(element.Id);
+    }
+
+    private void TakeDatabase(Guid id)
+    {
+        if (!Cache.IsApplying)
+        {
+            Cache.TakeDatabase(id);
+        }
+    }
+
+    private void KeepMine(Guid id)
+    {
+        if (!Cache.IsApplying)
+        {
+            Cache.KeepMine(id);
+        }
+    }
+
+    private void OnEditorKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            CancelEdit();
+        }
+        else if (args.Key == "Enter" && Editing is { } element && DraftError is null)
+        {
+            Save(element);
+        }
+    }
+
+    private async void OnCacheChanged() => await InvokeAsync(() =>
+    {
+        ForgetStale();
+        StateHasChanged();
+    });
+
+    /// <summary>
+    /// Closes the editor once its element can't be edited (a conflict, a delete, a clear) and forgets a selection
+    /// that isn't cached any more, so neither comes back with an old draft when the element does (Take DB, or a load
+    /// after a Reset, which keeps the ids).
+    /// </summary>
+    private void ForgetStale()
+    {
+        if (editingId is not null && Editing is null)
+        {
+            CancelEdit();
+        }
+
+        if (selectedId is { } id && !Cache.IsCached(id))
+        {
+            selectedId = null;
+        }
+    }
+
+    public void Dispose() => Cache.Changed -= OnCacheChanged;
+}

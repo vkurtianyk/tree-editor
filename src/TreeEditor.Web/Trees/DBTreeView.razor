@@ -1,0 +1,109 @@
+@* The database tree, read lazily: the roots first, one level per expand, wide levels a page at a time.
+   The selected element can be loaded into the local cache. After a Reset or an Apply, and on Refresh, it reloads
+   what it shows, keeping the expanded rows and the selection. *@
+@implements IDisposable
+@inject TreeApiClient Api
+@inject LocalCache Cache
+@inject DbTreeReload Reload
+@inject ISnackbar Snackbar
+
+<div class="tree-toolbar">
+    @* Disabled for deleted elements, and for cached ones so a reload can't overwrite pending edits. *@
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Download" Disabled="@(!CanLoadIntoCache)"
+               OnClick="LoadIntoCacheAsync">
+        Load into cache
+    </MudButton>
+    @* Other tabs' changes show only after a reload, so it can be asked for. *@
+    <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh"
+               Disabled="reloading" OnClick="ReloadAsync">
+        Refresh
+    </MudButton>
+</div>
+
+@if (reloading)
+{
+    <MudProgressLinear Indeterminate="true" Class="tree-loading" />
+}
+
+<div class="tree" role="tree" aria-label="Database tree">
+    @if (roots.IsLoaded && roots.Nodes.Count == 0)
+    {
+        <MudText Typo="Typo.body2">The database is empty.</MudText>
+    }
+    <DbTreeLevelView Level="roots" SelectedId="selected?.Id" OnSelect="Select" />
+</div>
+
+@code {
+    private DbTreeLevel roots = new(parentId: null);
+    private NodeListItem? selected;
+    private bool loadingIntoCache;
+    private bool reloading;
+    private int reloads;
+
+    private bool CanLoadIntoCache =>
+        selected is { IsDeleted: false } && !Cache.IsCached(selected.Id) && !loadingIntoCache;
+
+    protected override Task OnInitializedAsync()
+    {
+        Cache.Changed += OnCacheChanged;
+        Reload.Requested += OnReloadRequested;
+        return roots.LoadNextPageAsync(Api);
+    }
+
+    private void Select(NodeListItem item) => selected = item;
+
+    private async Task LoadIntoCacheAsync()
+    {
+        if (selected is not { } item || !CanLoadIntoCache)
+        {
+            return;
+        }
+
+        loadingIntoCache = true;
+        try
+        {
+            await Cache.LoadElementAsync(item.Id);
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Could not load \"{item.Value}\" into the cache: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loadingIntoCache = false;
+        }
+    }
+
+    private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
+
+    private async void OnReloadRequested() => await InvokeAsync(ReloadAsync);
+
+    /// <summary>
+    /// Loads the shown levels again and swaps them in once all arrived, then selects the selected element as listed
+    /// now (so a delete elsewhere disables "Load into cache"), or nothing when it isn't listed any more.
+    /// </summary>
+    private async Task ReloadAsync()
+    {
+        var reload = ++reloads;
+        reloading = true;
+        StateHasChanged();
+        var fresh = await roots.ReloadAsync(Api);
+        if (reload != reloads)
+        {
+            // A later reload started meanwhile; its result is the newer one.
+            return;
+        }
+
+        roots = fresh;
+        selected = selected is { } item ? roots.Find(item.Id) : null;
+        reloading = false;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        Cache.Changed -= OnCacheChanged;
+        Reload.Requested -= OnReloadRequested;
+    }
+}

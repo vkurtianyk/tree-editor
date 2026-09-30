@@ -1,0 +1,25 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".config/dotnet-tools.json" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/TreeEditor.Api/TreeEditor.Api.csproj" />
+    <Project Path="src/TreeEditor.AppHost/TreeEditor.AppHost.csproj" />
+    <Project Path="src/TreeEditor.Contracts/TreeEditor.Contracts.csproj" />
+    <Project Path="src/TreeEditor.Data/TreeEditor.Data.csproj" />
+    <Project Path="src/TreeEditor.Domain/TreeEditor.Domain.csproj" />
+    <Project Path="src/TreeEditor.MigrationService/TreeEditor.MigrationService.csproj" />
+    <Project Path="src/TreeEditor.ServiceDefaults/TreeEditor.ServiceDefaults.csproj" />
+    <Project Path="src/TreeEditor.Web/TreeEditor.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TreeEditor.Api.Tests/TreeEditor.Api.Tests.csproj" />
+    <Project Path="tests/TreeEditor.AppHost.Tests/TreeEditor.AppHost.Tests.csproj" />
+    <Project Path="tests/TreeEditor.Domain.Tests/TreeEditor.Domain.Tests.csproj" />
+    <Project Path="tests/TreeEditor.MigrationService.Tests/TreeEditor.MigrationService.Tests.csproj" />
+    <Project Path="tests/TreeEditor.Web.Tests/TreeEditor.Web.Tests.csproj" />
+  </Folder>
+</Solution>
