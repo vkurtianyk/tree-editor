@@ -14,6 +14,12 @@ public sealed record CachedElement(
     /// <summary>Whether the element carries a pending change; its version stays the loaded one until Apply.</summary>
     public ElementState State { get; init; }
 
+    /// <summary>
+    /// Set when the last Apply found the pending change in conflict with the database: the database's value and
+    /// version. It stays until the user takes the database copy or keeps theirs.
+    /// </summary>
+    public NodeConflict? Conflict { get; init; }
+
     public static CachedElement From(NodeDetails node)
     {
         ArgumentNullException.ThrowIfNull(node);
