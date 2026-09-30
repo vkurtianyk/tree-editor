@@ -27,11 +27,15 @@ internal sealed class FakeCacheApiClient(TestTree tree) : ICacheApiClient
     /// <summary>Scripts the next Apply: a response, a thrown error, or a task the test completes later.</summary>
     public void OnApply(Func<ApplyRequest, Task<ApplyResponse>> outcome) => applyOutcomes.Enqueue(outcome);
 
-    /// <summary>Scripts the next Apply to succeed like a server that adds no suffix: same values, a new version.</summary>
+    /// <summary>
+    /// Scripts the next Apply to succeed like a server that adds no suffix: same values, a new version. Deleted
+    /// elements come back deleted with their database value, as the server returns them.
+    /// </summary>
     public void OnApplySucceed(uint newVersion) => OnApply(request => Task.FromResult(new ApplyResponse(
         [
             .. request.Inserts.Select(insert => new AppliedNode(insert.Id, insert.Value, newVersion, IsDeleted: false)),
             .. request.Edits.Select(edit => new AppliedNode(edit.Id, edit.Value, newVersion, IsDeleted: false)),
+            .. request.Deletes.Select(delete => new AppliedNode(delete.Id, ValueOf(delete.Id), newVersion, IsDeleted: true)),
         ])));
 
     /// <summary>
@@ -60,6 +64,9 @@ internal sealed class FakeCacheApiClient(TestTree tree) : ICacheApiClient
 
         return node;
     }
+
+    private string ValueOf(Guid id) =>
+        tree.TryGet(id, out var node) ? node.Value : throw new InvalidOperationException($"No element has the id {id}.");
 
     public Task<ApplyResponse> ApplyAsync(ApplyRequest request, CancellationToken cancellationToken = default)
     {

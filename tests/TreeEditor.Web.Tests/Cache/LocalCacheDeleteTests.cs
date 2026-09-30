@@ -243,7 +243,7 @@ public sealed class LocalCacheDeleteTests
         var api = new FakeCacheApiClient(tree);
         var cache = await LoadedAsync(api, n["Root"], n["Alpha"], n["A2"], n["Beta"]);
         cache.Delete(n["Alpha"].Id);
-        api.OnApply(_ => Task.FromResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Alpha", 5000, IsDeleted: true)])));
+        api.OnApplySucceed(newVersion: 5000);
 
         await cache.ApplyAsync(TestContext.Current.CancellationToken);
 
