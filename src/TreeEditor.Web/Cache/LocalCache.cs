@@ -14,9 +14,9 @@ public sealed class LocalCache(ICacheApiClient api)
     /// <summary>Raised after every change of what the queries return.</summary>
     public event Action? Changed;
 
-    public bool HasPendingChanges => state.Originals.Count > 0;
+    public bool HasPendingChanges => state.Originals.Count > 0 || state.NewIds.Count > 0;
 
-    /// <summary>An Apply request is in flight. Only one is sent at a time; edits and discard wait for it.</summary>
+    /// <summary>An Apply request is in flight. Only one is sent at a time; changes and discard wait for it.</summary>
     public bool IsApplying => state.IsApplying;
 
     public bool CanApply => HasPendingChanges && !IsApplying;
@@ -61,7 +61,8 @@ public sealed class LocalCache(ICacheApiClient api)
     /// Changes an element's value locally; nothing is sent until <see cref="ApplyAsync"/>. The value is trimmed and
     /// validated at once: an invalid one is returned as an error and changes nothing. A value colliding with a cached
     /// live sibling gets the first free " (n)" suffix; the server resolves again against every sibling on Apply.
-    /// Changing the value back to the loaded one leaves nothing pending.
+    /// Changing the value back to the loaded one leaves nothing pending. A new element stays new: its insert carries
+    /// the latest value.
     /// </summary>
     public ValueEditResult EditValue(Guid id, string? value)
     {
@@ -91,7 +92,11 @@ public sealed class LocalCache(ICacheApiClient api)
         var resolved = SiblingSuffix.Resolve(normalized, siblings, self: id);
 
         var original = state.Originals.GetValueOrDefault(id, element);
-        if (resolved == original.Value)
+        if (element.State == ElementState.New)
+        {
+            state.Elements[id] = element with { Value = resolved };
+        }
+        else if (resolved == original.Value)
         {
             state.Originals.Remove(id);
             state.Elements[id] = original;
@@ -108,8 +113,53 @@ public sealed class LocalCache(ICacheApiClient api)
     }
 
     /// <summary>
-    /// Drops every pending change: changed elements go back to their loaded state, and clean elements stay cached.
-    /// Nothing is sent to the server.
+    /// Creates a child of a cached live element locally, with a new GUID v7 id that stays its id after Apply; nothing
+    /// is sent until <see cref="ApplyAsync"/>. The parent may itself be new. The value is trimmed, validated and
+    /// suffixed against cached live siblings like an edit; an invalid one is returned as an error and adds nothing.
+    /// </summary>
+    public AddChildResult AddChild(Guid parentId, string? value)
+    {
+        if (IsApplying)
+        {
+            throw new InvalidOperationException("Elements can't be added while an Apply is in flight.");
+        }
+
+        if (!state.Elements.TryGetValue(parentId, out var parent))
+        {
+            throw new InvalidOperationException($"The element {parentId} isn't cached.");
+        }
+
+        if (parent.IsDeleted)
+        {
+            throw new InvalidOperationException($"The element {parentId} is deleted and can't have children added.");
+        }
+
+        if (!ElementValue.TryNormalize(value, out var normalized, out var error))
+        {
+            return new AddChildResult(Id: null, Value: null, error);
+        }
+
+        var siblings = state.Elements.Values
+            .Where(sibling => sibling.ParentId == parentId)
+            .Select(sibling => new SiblingValue(sibling.Id, sibling.Value, sibling.IsDeleted));
+        var resolved = SiblingSuffix.Resolve(normalized, siblings);
+
+        var id = Guid.CreateVersion7();
+        state.Elements.Add(
+            id,
+            new CachedElement(id, parentId, Ancestry.ForChild(parent.Ancestors, id), resolved, Version: 0, IsDeleted: false)
+            {
+                State = ElementState.New,
+            });
+        state.NewIds.Add(id);
+        state.ViewTree = null;
+        Changed?.Invoke();
+        return new AddChildResult(id, resolved, Error: null);
+    }
+
+    /// <summary>
+    /// Drops every pending change: changed elements go back to their loaded state, new elements are removed, and
+    /// clean elements stay cached. Nothing is sent to the server.
     /// </summary>
     public void DiscardAll()
     {
@@ -118,7 +168,7 @@ public sealed class LocalCache(ICacheApiClient api)
             throw new InvalidOperationException("Changes can't be discarded while an Apply is in flight.");
         }
 
-        if (state.Originals.Count == 0)
+        if (!HasPendingChanges)
         {
             return;
         }
@@ -128,16 +178,23 @@ public sealed class LocalCache(ICacheApiClient api)
             state.Elements[id] = original;
         }
 
+        foreach (var id in state.NewIds)
+        {
+            state.Elements.Remove(id);
+        }
+
         state.Originals.Clear();
+        state.NewIds.Clear();
         state.ViewTree = null;
         Changed?.Invoke();
     }
 
     /// <summary>
-    /// Sends every pending change in one request, each edit with the version it was loaded with. On success the final
-    /// values and versions are stored and nothing is pending any more. On an error everything stays pending and the
-    /// error propagates. Does nothing when <see cref="CanApply"/> is false. A response that arrives after
-    /// <see cref="Clear"/> stores nothing: the elements it was for are gone.
+    /// Sends every pending change in one request: new elements as inserts in creation order (parents first), each edit
+    /// with the version it was loaded with. On success the final values and versions are stored, new elements keep
+    /// their ids, and nothing is pending any more. On an error everything stays pending and the error propagates.
+    /// Does nothing when <see cref="CanApply"/> is false. A response that arrives after <see cref="Clear"/> stores
+    /// nothing: the elements it was for are gone.
     /// </summary>
     public async Task ApplyAsync(CancellationToken cancellationToken = default)
     {
@@ -146,11 +203,15 @@ public sealed class LocalCache(ICacheApiClient api)
             return;
         }
 
+        var inserts = state.NewIds
+            .Select(id => state.Elements[id])
+            .Select(element => new NodeInsert(element.Id, element.ParentId!.Value, element.Value))
+            .ToList();
         var edits = state.Originals.Keys
             .Select(id => state.Elements[id])
             .Select(element => new NodeEdit(element.Id, element.Value, element.Version))
             .ToList();
-        var request = new ApplyRequest(Inserts: [], edits, Deletes: []);
+        var request = new ApplyRequest(inserts, edits, Deletes: []);
 
         var applyingIn = state;
         applyingIn.IsApplying = true;
@@ -188,6 +249,11 @@ public sealed class LocalCache(ICacheApiClient api)
             state.Elements[id] = state.Elements[id] with { State = ElementState.Clean };
         }
 
+        foreach (var id in state.NewIds)
+        {
+            state.Elements[id] = state.Elements[id] with { State = ElementState.Clean };
+        }
+
         foreach (var node in response.Nodes)
         {
             if (state.Elements.TryGetValue(node.Id, out var element))
@@ -203,6 +269,7 @@ public sealed class LocalCache(ICacheApiClient api)
         }
 
         state.Originals.Clear();
+        state.NewIds.Clear();
         state.ViewTree = null;
     }
 
@@ -218,6 +285,9 @@ public sealed class LocalCache(ICacheApiClient api)
         /// The loaded copy of every element with a pending change, in the order they were first changed.
         /// </summary>
         public OrderedDictionary<Guid, CachedElement> Originals { get; } = [];
+
+        /// <summary>Elements created locally that wait to be inserted, in creation order, so parents come first.</summary>
+        public List<Guid> NewIds { get; } = [];
 
         /// <summary>An Apply request is in flight for these elements.</summary>
         public bool IsApplying { get; set; }

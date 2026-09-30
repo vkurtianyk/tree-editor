@@ -8,6 +8,9 @@ public enum ElementState
 
     /// <summary>Its value was changed locally and waits for Apply.</summary>
     Edited,
+
+    /// <summary>Created locally and waits for Apply to insert it; its version is unknown until then.</summary>
+    New,
 }
 
 /// <summary>

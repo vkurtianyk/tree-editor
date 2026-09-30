@@ -28,7 +28,10 @@ internal sealed class FakeCacheApiClient(TestTree tree) : ICacheApiClient
 
     /// <summary>Scripts the next Apply to succeed like a server that adds no suffix: same values, a new version.</summary>
     public void OnApplySucceed(uint newVersion) => OnApply(request => Task.FromResult(new ApplyResponse(
-        [.. request.Edits.Select(edit => new AppliedNode(edit.Id, edit.Value, newVersion, IsDeleted: false))])));
+        [
+            .. request.Inserts.Select(insert => new AppliedNode(insert.Id, insert.Value, newVersion, IsDeleted: false)),
+            .. request.Edits.Select(edit => new AppliedNode(edit.Id, edit.Value, newVersion, IsDeleted: false)),
+        ])));
 
     public Task<NodeDetails> LoadNodeAsync(Guid id, CancellationToken cancellationToken = default)
     {
