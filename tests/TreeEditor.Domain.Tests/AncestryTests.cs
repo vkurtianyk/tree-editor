@@ -12,6 +12,28 @@ public class AncestryTests
         { [A, B], C, [A, B, C] },
     };
 
+    public static TheoryData<Guid[], Guid> RootCases => new()
+    {
+        { [A], A },
+        { [A, B], A },
+        { [A, B, C], A },
+    };
+
+    public static TheoryData<Guid[], Guid, bool> DescendantCases => new()
+    {
+        // A root descends from nothing, not even itself.
+        { [A], A, false },
+        { [A], B, false },
+        // Parent and any further ancestor.
+        { [A, B], A, true },
+        { [A, B, C], B, true },
+        { [A, B, C], A, true },
+        // Not its own descendant.
+        { [A, B, C], C, false },
+        // Unrelated: B is not on the path.
+        { [A, C], B, false },
+    };
+
     [Fact]
     public void Root_ancestors_are_just_its_own_id()
     {
@@ -26,10 +48,17 @@ public class AncestryTests
     }
 
     [Theory]
-    [MemberData(nameof(ChildCases))]
-    public void Root_is_the_first_ancestor(Guid[] parentAncestors, Guid id, Guid[] _)
+    [MemberData(nameof(RootCases))]
+    public void Root_is_the_first_ancestor(Guid[] ancestors, Guid expected)
     {
-        Assert.Equal(A, Ancestry.RootOf(Ancestry.ForChild(parentAncestors, id)));
+        Assert.Equal(expected, Ancestry.RootOf(ancestors));
+    }
+
+    [Theory]
+    [MemberData(nameof(DescendantCases))]
+    public void Descendant_has_the_ancestor_on_its_path_before_itself(Guid[] ancestors, Guid ancestorId, bool expected)
+    {
+        Assert.Equal(expected, Ancestry.IsDescendantOf(ancestors, ancestorId));
     }
 
     [Fact]
@@ -42,6 +71,13 @@ public class AncestryTests
     public void Parent_ancestors_must_not_be_empty()
     {
         Assert.Throws<ArgumentException>(() => Ancestry.ForChild([], A));
+    }
+
+    [Fact]
+    public void Empty_ancestor_list_has_no_root_and_no_ancestors()
+    {
+        Assert.Throws<ArgumentException>(() => Ancestry.RootOf([]));
+        Assert.Throws<ArgumentException>(() => Ancestry.IsDescendantOf([], A));
     }
 
     [Fact]
