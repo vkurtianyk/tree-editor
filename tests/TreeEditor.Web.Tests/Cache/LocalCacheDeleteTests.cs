@@ -102,6 +102,56 @@ public sealed class LocalCacheDeleteTests
     }
 
     [Fact]
+    public async Task Deleting_a_new_element_removes_it_with_its_new_children_and_leaves_nothing_to_insert()
+    {
+        var (tree, n) = Subtree();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Root"], n["Alpha"], n["Beta"]);
+        var kid = cache.AddChild(n["Alpha"].Id, "Kid").Id!.Value;
+        var grandkid = cache.AddChild(kid, "Grandkid").Id!.Value;
+
+        cache.Delete(kid);
+
+        Assert.Null(cache.Find(kid));
+        Assert.Null(cache.Find(grandkid));
+        Assert.False(cache.HasPendingChanges);
+        Assert.False(cache.CanApply);
+        Assert.Equal(["Root", "  Alpha", "  Beta"], Outline.Of(cache.ViewTree, tree));
+
+        cache.EditValue(n["Beta"].Id, "Beta edited");
+        api.OnApply(_ => Task.FromResult(
+            new ApplyResponse([new AppliedNode(n["Beta"].Id, "Beta edited", 5000, IsDeleted: false)])));
+        await cache.ApplyAsync(TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(api.ApplyRequests);
+        Assert.Empty(request.Inserts);
+        Assert.Empty(request.Deletes);
+        Assert.Equal([new NodeEdit(n["Beta"].Id, "Beta edited", n["Beta"].Version)], request.Edits);
+    }
+
+    [Fact]
+    public async Task Deleting_the_loaded_parent_of_a_new_element_sends_only_the_parent_delete()
+    {
+        var (tree, n) = Subtree();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Root"], n["Alpha"], n["Beta"]);
+        var kid = cache.AddChild(n["Alpha"].Id, "Kid").Id!.Value;
+
+        cache.Delete(n["Alpha"].Id);
+
+        Assert.Null(cache.Find(kid));
+        Assert.Equal(["Root", "  Alpha [deleted] [pending]", "  Beta"], Outline.Of(cache.ViewTree, tree));
+        api.OnApply(_ => Task.FromResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Alpha", 5000, IsDeleted: true)])));
+        await cache.ApplyAsync(TestContext.Current.CancellationToken);
+
+        var request = Assert.Single(api.ApplyRequests);
+        Assert.Empty(request.Inserts);
+        Assert.Empty(request.Edits);
+        Assert.Equal([new NodeDelete(n["Alpha"].Id, n["Alpha"].Version)], request.Deletes);
+        Assert.False(cache.HasPendingChanges);
+    }
+
+    [Fact]
     public async Task Deleted_and_uncached_elements_cannot_be_deleted_or_edited()
     {
         var (tree, n) = Subtree();
