@@ -185,6 +185,25 @@ public sealed class LocalCacheConflictTests
     }
 
     [Fact]
+    public async Task Take_database_suffixes_a_cached_sibling_whose_pending_value_it_collides_with()
+    {
+        var (tree, n) = Sample();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Alpha"], n["Beta"]);
+        cache.EditValue(n["Alpha"].Id, "Alpha mine");
+        cache.EditValue(n["Beta"].Id, "Zed");
+        OnApplyConflict(api, new NodeConflict(n["Alpha"].Id, ConflictReason.VersionChanged, "zed", 2000, false));
+        await ApplyRejectedAsync(cache);
+
+        cache.TakeDatabase(n["Alpha"].Id);
+
+        Assert.Equal(CachedElement.From(n["Alpha"]) with { Value = "zed", Version = 2000 }, cache.Find(n["Alpha"].Id));
+        Assert.Equal(
+            CachedElement.From(n["Beta"]) with { Value = "Zed (1)", State = ElementState.Edited },
+            cache.Find(n["Beta"].Id));
+    }
+
+    [Fact]
     public async Task Take_database_on_a_conflicting_delete_brings_back_the_element_and_the_descendants_deleted_with_it()
     {
         var (tree, n) = Sample();

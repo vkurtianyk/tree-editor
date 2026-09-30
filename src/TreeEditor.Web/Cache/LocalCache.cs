@@ -118,22 +118,7 @@ public sealed class LocalCache(ICacheApiClient api)
             .Where(sibling => sibling.ParentId == element.ParentId)
             .Select(sibling => new SiblingValue(sibling.Id, sibling.Value, sibling.IsDeleted));
         var resolved = SiblingSuffix.Resolve(normalized, siblings, self: id);
-
-        var original = state.Originals.GetValueOrDefault(id, element);
-        if (element.State == ElementState.New)
-        {
-            state.Elements[id] = element with { Value = resolved };
-        }
-        else if (resolved == original.Value)
-        {
-            state.Originals.Remove(id);
-            state.Elements[id] = original;
-        }
-        else
-        {
-            state.Originals.TryAdd(id, element);
-            state.Elements[id] = element with { Value = resolved, State = ElementState.Edited };
-        }
+        StoreValue(element, resolved);
 
         state.ViewTree = null;
         Changed?.Invoke();
@@ -351,7 +336,8 @@ public sealed class LocalCache(ICacheApiClient api)
     /// <summary>
     /// Resolves a conflict in favour of the database: the element takes the database's value and version, and its
     /// pending change is dropped. For a pending delete, the cached descendants deleted with it come back too; those
-    /// deleted on their own before it stay pending deletes.
+    /// deleted on their own before it stay pending deletes. A cached sibling whose pending value the database's now
+    /// collides with gets the first free suffix, as its edit would have.
     /// </summary>
     public void TakeDatabase(Guid id)
     {
@@ -375,6 +361,7 @@ public sealed class LocalCache(ICacheApiClient api)
             }
         }
 
+        ResolveSiblingsAgainst(state.Elements[id]);
         state.ViewTree = null;
         Changed?.Invoke();
     }
@@ -503,6 +490,52 @@ public sealed class LocalCache(ICacheApiClient api)
         state.Originals.Remove(element.Id);
         state.ConflictIds.Remove(element.Id);
         StoreDeletedBelow(element.Id);
+    }
+
+    /// <summary>
+    /// Stores a value resolved for the element: a new element stays new, the loaded value leaves nothing pending, any
+    /// other value is a pending edit.
+    /// </summary>
+    private void StoreValue(CachedElement element, string value)
+    {
+        var original = state.Originals.GetValueOrDefault(element.Id, element);
+        if (element.State == ElementState.New)
+        {
+            state.Elements[element.Id] = element with { Value = value };
+        }
+        else if (value == original.Value)
+        {
+            state.Originals.Remove(element.Id);
+            state.Elements[element.Id] = original;
+        }
+        else
+        {
+            state.Originals.TryAdd(element.Id, element);
+            state.Elements[element.Id] = element with { Value = value, State = ElementState.Edited };
+        }
+    }
+
+    /// <summary>
+    /// The element took the database's value, which a live sibling's pending value may now collide with; that
+    /// sibling is suffixed again. A conflicting one keeps its value until it's resolved.
+    /// </summary>
+    private void ResolveSiblingsAgainst(CachedElement element)
+    {
+        var key = ElementValue.SiblingKey(element.Value);
+        var colliding = state.Elements.Values
+            .Where(sibling => sibling.Id != element.Id
+                && sibling.ParentId == element.ParentId
+                && sibling.State is ElementState.Edited or ElementState.New
+                && sibling.Conflict is null
+                && ElementValue.SiblingKey(sibling.Value) == key)
+            .ToList();
+        foreach (var sibling in colliding)
+        {
+            var siblings = state.Elements.Values
+                .Where(other => other.ParentId == element.ParentId)
+                .Select(other => new SiblingValue(other.Id, other.Value, other.IsDeleted));
+            StoreValue(sibling, SiblingSuffix.Resolve(sibling.Value, siblings, self: sibling.Id));
+        }
     }
 
     /// <summary>The element with the id and its conflict, for resolving it.</summary>
