@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TreeEditor.Data\TreeEditor.Data.csproj" />
+    <ProjectReference Include="..\TreeEditor.Domain\TreeEditor.Domain.csproj" />
+    <ProjectReference Include="..\TreeEditor.ServiceDefaults\TreeEditor.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>

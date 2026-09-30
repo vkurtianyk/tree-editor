@@ -9,6 +9,7 @@
     <Project Path="src/TreeEditor.Contracts/TreeEditor.Contracts.csproj" />
     <Project Path="src/TreeEditor.Data/TreeEditor.Data.csproj" />
     <Project Path="src/TreeEditor.Domain/TreeEditor.Domain.csproj" />
+    <Project Path="src/TreeEditor.MigrationService/TreeEditor.MigrationService.csproj" />
     <Project Path="src/TreeEditor.ServiceDefaults/TreeEditor.ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/tests/">
