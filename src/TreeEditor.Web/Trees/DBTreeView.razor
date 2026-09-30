@@ -1,8 +1,9 @@
 @* The database tree, read lazily: the roots first, one level per expand, wide levels a page at a time.
-   The selected element can be loaded into the local cache. *@
+   The selected element can be loaded into the local cache. After a Reset it reloads from the roots. *@
 @implements IDisposable
 @inject TreeApiClient Api
 @inject LocalCache Cache
+@inject DbTreeReload Reload
 @inject ISnackbar Snackbar
 
 <div class="tree-toolbar">
@@ -23,7 +24,7 @@
 </div>
 
 @code {
-    private readonly DbTreeLevel roots = new(parentId: null);
+    private DbTreeLevel roots = new(parentId: null);
     private NodeListItem? selected;
     private bool loadingIntoCache;
 
@@ -33,6 +34,7 @@
     protected override Task OnInitializedAsync()
     {
         Cache.Changed += OnCacheChanged;
+        Reload.Requested += OnReloadRequested;
         return roots.LoadNextPageAsync(Api);
     }
 
@@ -62,5 +64,21 @@
 
     private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
 
-    public void Dispose() => Cache.Changed -= OnCacheChanged;
+    private async void OnReloadRequested() => await InvokeAsync(ReloadAsync);
+
+    /// <summary>Drops every loaded level and the selection, then loads the roots again.</summary>
+    private async Task ReloadAsync()
+    {
+        roots = new DbTreeLevel(parentId: null);
+        selected = null;
+        StateHasChanged();
+        await roots.LoadNextPageAsync(Api);
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        Cache.Changed -= OnCacheChanged;
+        Reload.Requested -= OnReloadRequested;
+    }
 }

@@ -4,6 +4,7 @@ using MudBlazor.Services;
 using TreeEditor.Web;
 using TreeEditor.Web.Api;
 using TreeEditor.Web.Cache;
+using TreeEditor.Web.Trees;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
@@ -18,5 +19,8 @@ builder.Services.AddScoped<ICacheApiClient>(services => services.GetRequiredServ
 
 // One cache per browser tab, in memory only: a page refresh starts empty.
 builder.Services.AddScoped<LocalCache>();
+
+// Lets the toolbar's Reset reload DBTreeView from the roots.
+builder.Services.AddScoped<DbTreeReload>();
 
 await builder.Build().RunAsync();

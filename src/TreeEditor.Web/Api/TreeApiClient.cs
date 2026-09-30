@@ -24,4 +24,11 @@ public sealed class TreeApiClient(HttpClient http) : ICacheApiClient
 
     public Task<ApplyResponse> ApplyAsync(ApplyRequest request, CancellationToken cancellationToken = default) =>
         throw new NotImplementedException("The Apply endpoint does not exist yet.");
+
+    /// <summary>Restores the sample data in the database. Throws <see cref="HttpRequestException"/> when it failed.</summary>
+    public async Task ResetAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsync(ApiRoutes.Reset, content: null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 }

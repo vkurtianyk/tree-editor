@@ -1,0 +1,52 @@
+@* Toolbar Reset: after a confirmation, restores the sample data in the database, clears the local cache
+   (pending changes included) and reloads DBTreeView from the roots. *@
+@inject TreeApiClient Api
+@inject LocalCache Cache
+@inject DbTreeReload DbTree
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.RestartAlt"
+           Disabled="resetting" OnClick="ResetAsync">
+    Reset
+</MudButton>
+
+@code {
+    private bool resetting;
+
+    private async Task ResetAsync()
+    {
+        if (resetting)
+        {
+            return;
+        }
+
+        var confirmed = await Dialogs.ShowMessageBoxAsync(
+            "Reset to the sample data?",
+            "The database goes back to the initial sample data, and everything applied since is lost. "
+            + "The local cache is cleared, including changes that were not applied.",
+            yesText: "Reset",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        resetting = true;
+        try
+        {
+            await Api.ResetAsync();
+            Cache.Clear();
+            DbTree.Request();
+            Snackbar.Add("The sample data is restored.", Severity.Success);
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Reset failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            resetting = false;
+        }
+    }
+}
