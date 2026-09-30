@@ -299,6 +299,30 @@ public sealed class LocalCacheDeleteTests
         Assert.False(cache.HasPendingChanges);
     }
 
+    [Fact]
+    public async Task Element_loaded_deleted_deletes_its_cached_descendants_and_drops_their_changes()
+    {
+        var (tree, n) = Subtree();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Root"], n["A1"], n["A3"], n["Beta"]);
+        cache.EditValue(n["A1"].Id, "A1 mine");
+        cache.Delete(n["A3"].Id);
+        var kid = cache.AddChild(n["A1"].Id, "Kid").Id!.Value;
+        // Another tab deleted Alpha; this tab's database tree still showed it live.
+        tree.Delete(n["Alpha"]);
+
+        await cache.LoadElementAsync(n["Alpha"].Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["Root", "  Alpha [deleted]", "    A1 [deleted]", "      … 1 (A2)", "        A3 [deleted]", "  Beta"],
+            Outline.Of(cache.ViewTree, tree));
+        Assert.Equal(CachedElement.From(n["A1"]) with { IsDeleted = true }, cache.Find(n["A1"].Id));
+        Assert.False(cache.IsCached(kid));
+        Assert.False(cache.HasPendingChanges);
+        Assert.Throws<InvalidOperationException>(() => cache.EditValue(n["A1"].Id, "Renamed"));
+        Assert.Throws<InvalidOperationException>(() => cache.AddChild(n["A1"].Id, "Kid"));
+    }
+
     /// <summary>
     /// Root with Alpha and Beta; below Alpha a chain A1 → A2 → A3 and Gone, deleted in the database.
     /// </summary>

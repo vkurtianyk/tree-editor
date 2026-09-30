@@ -364,6 +364,26 @@ public sealed class LocalCacheConflictTests
     }
 
     [Fact]
+    public async Task Ancestor_loaded_deleted_resolves_the_conflicts_below_it()
+    {
+        var (tree, n) = Sample();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["A2"]);
+        cache.Delete(n["A2"].Id);
+        OnApplyConflict(api, new NodeConflict(n["A2"].Id, ConflictReason.VersionChanged, "A2 elsewhere", 2000, false));
+        await ApplyRejectedAsync(cache);
+        tree.Delete(n["Alpha"]);
+
+        await cache.LoadElementAsync(n["Alpha"].Id, TestContext.Current.CancellationToken);
+
+        // Deleted in the database with Alpha: nothing to take or keep, and it can't come back live.
+        Assert.False(cache.HasUnresolvedConflicts);
+        Assert.False(cache.HasPendingChanges);
+        Assert.Equal(CachedElement.From(n["A2"]) with { IsDeleted = true }, cache.Find(n["A2"].Id));
+        Assert.Throws<InvalidOperationException>(() => cache.TakeDatabase(n["A2"].Id));
+    }
+
+    [Fact]
     public async Task Conflict_that_arrives_after_a_clear_stores_nothing()
     {
         var (tree, n) = Sample();

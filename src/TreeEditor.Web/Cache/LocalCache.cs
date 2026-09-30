@@ -50,6 +50,8 @@ public sealed class LocalCache(ICacheApiClient api)
     /// not requested again, so a reload can never overwrite it. Load errors propagate and cache nothing.
     /// A load that finishes after <see cref="Clear"/> caches nothing either: it read the database before the clear.
     /// An element loaded below a cached deleted ancestor is deleted too (see <see cref="DeleteBelowDeletedAncestor"/>).
+    /// An element that comes back deleted in the database takes its cached descendants with it, as the database's
+    /// cascade did: their pending changes and conflicts are dropped and new ones are removed.
     /// </summary>
     public async Task LoadElementAsync(Guid id, CancellationToken cancellationToken = default)
     {
@@ -67,7 +69,16 @@ public sealed class LocalCache(ICacheApiClient api)
             return;
         }
 
-        DeleteBelowDeletedAncestor(state.Elements[id]);
+        var element = state.Elements[id];
+        if (element.IsDeleted)
+        {
+            StoreDeletedBelow(id);
+        }
+        else
+        {
+            DeleteBelowDeletedAncestor(element);
+        }
+
         state.ViewTree = null;
         Changed?.Invoke();
     }
@@ -406,6 +417,9 @@ public sealed class LocalCache(ICacheApiClient api)
             state.Elements[id] = state.Elements[id] with { State = ElementState.Clean };
         }
 
+        state.Originals.Clear();
+        state.NewIds.Clear();
+
         foreach (var node in response.Nodes)
         {
             if (state.Elements.TryGetValue(node.Id, out var element))
@@ -422,11 +436,9 @@ public sealed class LocalCache(ICacheApiClient api)
 
         foreach (var node in response.Nodes.Where(node => node.IsDeleted))
         {
-            StoreDeletedSubtree(node.Id);
+            StoreDeletedBelow(node.Id);
         }
 
-        state.Originals.Clear();
-        state.NewIds.Clear();
         state.ViewTree = null;
     }
 
@@ -473,28 +485,7 @@ public sealed class LocalCache(ICacheApiClient api)
         };
         state.Originals.Remove(element.Id);
         state.ConflictIds.Remove(element.Id);
-
-        var descendants = state.Elements.Values
-            .Where(member => Ancestry.IsDescendantOf(member.Ancestors, element.Id))
-            .ToList();
-        foreach (var descendant in descendants)
-        {
-            if (descendant.State == ElementState.New)
-            {
-                state.Elements.Remove(descendant.Id);
-                state.NewIds.Remove(descendant.Id);
-                continue;
-            }
-
-            state.Elements[descendant.Id] = state.Originals.GetValueOrDefault(descendant.Id, descendant) with
-            {
-                IsDeleted = true,
-                State = ElementState.Clean,
-                Conflict = null,
-            };
-            state.Originals.Remove(descendant.Id);
-            state.ConflictIds.Remove(descendant.Id);
-        }
+        StoreDeletedBelow(element.Id);
     }
 
     /// <summary>The element with the id and its conflict, for resolving it.</summary>
@@ -555,11 +546,6 @@ public sealed class LocalCache(ICacheApiClient api)
     /// </summary>
     private void DeleteBelowDeletedAncestor(CachedElement element)
     {
-        if (element.IsDeleted)
-        {
-            return;
-        }
-
         var deletedAncestors = element.Ancestors
             .Where(ancestorId => ancestorId != element.Id)
             .Select(ancestorId => state.Elements.GetValueOrDefault(ancestorId))
@@ -581,16 +567,33 @@ public sealed class LocalCache(ICacheApiClient api)
         }
     }
 
-    /// <summary>The database deleted the element's subtree: every cached descendant is deleted, with nothing pending.</summary>
-    private void StoreDeletedSubtree(Guid id)
+    /// <summary>
+    /// The database deleted the element's subtree, so every cached descendant is deleted with nothing pending: new
+    /// ones are removed, as they can't be inserted there any more; the others go back to their loaded copy, deleted,
+    /// and their conflicts are dropped.
+    /// </summary>
+    private void StoreDeletedBelow(Guid id)
     {
         var descendants = state.Elements.Values
             .Where(element => Ancestry.IsDescendantOf(element.Ancestors, id))
             .ToList();
         foreach (var descendant in descendants)
         {
+            if (descendant.State == ElementState.New)
+            {
+                state.Elements.Remove(descendant.Id);
+                state.NewIds.Remove(descendant.Id);
+                continue;
+            }
+
+            state.Elements[descendant.Id] = state.Originals.GetValueOrDefault(descendant.Id, descendant) with
+            {
+                IsDeleted = true,
+                State = ElementState.Clean,
+                Conflict = null,
+            };
             state.Originals.Remove(descendant.Id);
-            state.Elements[descendant.Id] = descendant with { IsDeleted = true, State = ElementState.Clean };
+            state.ConflictIds.Remove(descendant.Id);
         }
     }
 

@@ -32,6 +32,18 @@ internal sealed class TestTree
         return chain;
     }
 
+    /// <summary>
+    /// Deletes the element with its subtree, as another tab's Apply would; each gets a new version. Loads that
+    /// start afterwards see it.
+    /// </summary>
+    public void Delete(NodeDetails node)
+    {
+        foreach (var member in nodes.Values.Where(member => member.Ancestors.Contains(node.Id)).ToList())
+        {
+            nodes[member.Id] = member with { Version = member.Version + 10_000, IsDeleted = true };
+        }
+    }
+
     public bool TryGet(Guid id, out NodeDetails node) => nodes.TryGetValue(id, out node!);
 
     public string NameOf(Guid id) => names[id];
