@@ -7,9 +7,23 @@
     min-height: 1.75rem;
 }
 
+/* Same width as the spacer, so values line up with or without an expand arrow. */
+.tree-expander.mud-icon-button-size-small {
+    padding: 0;
+}
+
 .tree-expander-spacer {
     display: inline-block;
+    flex: none;
     width: 1.25rem;
+}
+
+.tree-group {
+    padding-left: 1.25rem;
+}
+
+.tree-loading {
+    margin: 0.5rem 0;
 }
 
 .tree-value.deleted {

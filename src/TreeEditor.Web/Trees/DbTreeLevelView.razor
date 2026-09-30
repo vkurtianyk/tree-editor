@@ -1,0 +1,72 @@
+@* One level of DBTreeView: its rows, the children of expanded rows (recursively), and a "Load 100 more" row. *@
+@inject TreeApiClient Api
+
+@foreach (var node in Level.Nodes)
+{
+    <div @key="node.Item.Id" role="treeitem" data-node-id="@node.Item.Id"
+         aria-expanded="@(node.Item.HasChildren ? (node.IsExpanded ? "true" : "false") : null)">
+        <div class="tree-row">
+            @if (node.Item.HasChildren)
+            {
+                <MudIconButton Class="tree-expander" Size="Size.Small"
+                               Icon="@(node.IsExpanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
+                               aria-label="@(node.IsExpanded ? "Collapse" : "Expand")"
+                               OnClick="() => ToggleAsync(node)" />
+            }
+            else
+            {
+                <span class="tree-expander-spacer"></span>
+            }
+            <span class="@(node.Item.IsDeleted ? "tree-value deleted" : "tree-value")">@node.Item.Value</span>
+        </div>
+        @if (node.IsExpanded && node.Children is { } children)
+        {
+            <div role="group" class="tree-group">
+                <DbTreeLevelView Level="children" />
+            </div>
+        }
+    </div>
+}
+
+@if (Level.IsLoading)
+{
+    <MudProgressLinear Indeterminate="true" Class="tree-loading" />
+}
+else if (Level.HasMore)
+{
+    <div class="tree-row">
+        <span class="tree-expander-spacer"></span>
+        <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.ExpandMore"
+                   OnClick="LoadNextPageAsync">
+            Load @ChildrenPage.PageSize more
+        </MudButton>
+    </div>
+}
+
+@if (Level.Error is { } error)
+{
+    <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public DbTreeLevel Level { get; set; } = null!;
+
+    private async Task ToggleAsync(DbTreeNode node)
+    {
+        if (node.IsExpanded)
+        {
+            node.Collapse();
+            return;
+        }
+
+        // One level per expand; a level loaded before (or failed before) is reused.
+        var children = node.Expand();
+        if (!children.IsLoaded)
+        {
+            await children.LoadNextPageAsync(Api);
+        }
+    }
+
+    private Task LoadNextPageAsync() => Level.LoadNextPageAsync(Api);
+}
