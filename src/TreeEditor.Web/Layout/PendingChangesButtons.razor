@@ -1,0 +1,56 @@
+@* Toolbar Apply and "Discard all changes" for the local cache's pending changes, and the leave-page warning
+   while any are pending. Apply is disabled while nothing is pending or a request is in flight. *@
+@implements IDisposable
+@inject LocalCache Cache
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<NavigationLock ConfirmExternalNavigation="@Cache.HasPendingChanges" OnBeforeInternalNavigation="ConfirmLeaveAsync" />
+
+<MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.CloudUpload"
+           Disabled="@(!Cache.CanApply)" OnClick="ApplyAsync">
+    @(Cache.IsApplying ? "Applying…" : "Apply")
+</MudButton>
+<MudButton Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.Undo"
+           Disabled="@(!Cache.HasPendingChanges || Cache.IsApplying)" OnClick="Cache.DiscardAll">
+    Discard all changes
+</MudButton>
+
+@code {
+    protected override void OnInitialized() => Cache.Changed += OnCacheChanged;
+
+    private async Task ApplyAsync()
+    {
+        try
+        {
+            await Cache.ApplyAsync();
+            Snackbar.Add("The changes are applied.", Severity.Success);
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Apply failed; the changes are still pending. {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmLeaveAsync(LocationChangingContext context)
+    {
+        if (!Cache.HasPendingChanges)
+        {
+            return;
+        }
+
+        var leave = await Dialogs.ShowMessageBoxAsync(
+            "Leave with pending changes?",
+            "The changes in the cache are not applied and will be lost.",
+            yesText: "Leave",
+            cancelText: "Stay");
+        if (leave != true)
+        {
+            context.PreventNavigation();
+        }
+    }
+
+    private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Cache.Changed -= OnCacheChanged;
+}

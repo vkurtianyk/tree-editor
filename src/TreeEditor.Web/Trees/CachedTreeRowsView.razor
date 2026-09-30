@@ -9,6 +9,10 @@
                  aria-selected="@(element.Id == SelectedId ? "true" : "false")">
                 <div class="tree-row">
                     <span class="@ValueClass(element)" @onclick="() => OnSelect.InvokeAsync(element.Id)">@element.Value</span>
+                    @if (element.State == ElementState.Edited)
+                    {
+                        <span class="tree-marker edited" title="Edited; not applied yet">edited</span>
+                    }
                 </div>
                 @ChildrenOf(row)
             </div>
@@ -39,6 +43,7 @@
     private string ValueClass(CachedElement element) =>
         "tree-value selectable"
         + (element.IsDeleted ? " deleted" : "")
+        + (element.State == ElementState.Edited ? " edited" : "")
         + (element.Id == SelectedId ? " selected" : "");
 
     private RenderFragment? ChildrenOf(CachedTreeRow row) => row.Children.Count == 0
