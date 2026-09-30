@@ -1,4 +1,5 @@
 using Scalar.AspNetCore;
+using TreeEditor.Api.Apply;
 using TreeEditor.Api.Errors;
 using TreeEditor.Api.Nodes;
 using TreeEditor.Data;
@@ -31,6 +32,7 @@ app.MapScalarApiReference(options => options.WithTitle("Tree editor API"));
 app.MapDefaultEndpoints();
 
 app.MapNodeEndpoints();
+app.MapApplyEndpoints();
 
 // Unknown API routes are a 404 ProblemDetails, not the Web app's index.html.
 app.MapFallback("/api/{**path}", () => TypedResults.Problem(

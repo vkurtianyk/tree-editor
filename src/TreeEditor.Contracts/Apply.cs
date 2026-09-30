@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TreeEditor.Contracts;
 
 /// <summary>
@@ -25,3 +27,27 @@ public sealed record NodeDelete(Guid Id, uint Version);
 public sealed record ApplyResponse(IReadOnlyList<AppliedNode> Nodes);
 
 public sealed record AppliedNode(Guid Id, string Value, uint Version, bool IsDeleted);
+
+/// <summary>Why a change can't be applied.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ConflictReason>))]
+public enum ConflictReason
+{
+    /// <summary>The element changed in the database since the client loaded it.</summary>
+    VersionChanged,
+
+    /// <summary>The element is deleted in the database, or no longer exists at all.</summary>
+    Deleted,
+}
+
+/// <summary>
+/// An element whose change conflicts with the database, with its current database value, version and deleted flag.
+/// Value and version are null when the element no longer exists.
+/// </summary>
+public sealed record NodeConflict(Guid Id, ConflictReason Reason, string? Value, uint? Version, bool IsDeleted);
+
+/// <summary>Members Apply adds to its RFC 9457 problem responses.</summary>
+public static class ApplyProblem
+{
+    /// <summary>The 409 problem's list of <see cref="NodeConflict"/>s.</summary>
+    public const string ConflictsMember = "conflicts";
+}

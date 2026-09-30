@@ -14,6 +14,12 @@ public static class ApiRoutes
     /// </summary>
     public const string Children = Nodes + "/children";
 
+    /// <summary>
+    /// Apply (POST): every pending change in one all-or-nothing transaction. 400 problem for a malformed request,
+    /// 409 problem listing the conflicting elements.
+    /// </summary>
+    public const string Apply = "/api/apply";
+
     public static string NodeById(Guid id) => $"{Nodes}/{id}";
 
     public static string ChildrenOf(Guid? parentId, ChildrenCursor? after = null)
