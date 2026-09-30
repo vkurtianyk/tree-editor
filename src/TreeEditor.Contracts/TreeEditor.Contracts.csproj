@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- DTOs and routes shared by Api and Web. -->
+
+</Project>
