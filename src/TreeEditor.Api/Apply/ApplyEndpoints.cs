@@ -11,7 +11,7 @@ namespace TreeEditor.Api.Apply;
 /// Apply: every pending change of a local cache in one all-or-nothing transaction.
 /// Steps: validate the request (400), derive the touched roots from the stored ancestors, <c>BEGIN</c>,
 /// check every change against the database and collect the conflicts (409), then write inserts, edits and
-/// deletes in that order and <c>COMMIT</c>. Only edits are supported so far.
+/// deletes in that order and <c>COMMIT</c>. Deletes are not supported yet.
 /// </summary>
 public static class ApplyEndpoints
 {
@@ -26,12 +26,14 @@ public static class ApplyEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .WithSummary("Apply changes")
             .WithDescription(
-                "Applies inserts, edits and deletes in one transaction; only edits are supported so far. " +
-                "An edit applies when its version still matches and the element isn't deleted. Values are trimmed; " +
-                "a value colliding with a live sibling (case-insensitive) gets the first free \" (n)\" suffix. " +
-                "Returns every changed element's final value, new version and deleted flag. An invalid value or an " +
-                "id used twice is a 400 problem; changes made elsewhere are a 409 problem listing every conflicting " +
-                $"element under \"{ApplyProblem.ConflictsMember}\". Nothing is written on an error.");
+                "Applies inserts, edits and deletes in one transaction; deletes are not supported yet. " +
+                "An insert applies when its parent exists and isn't deleted; the parent may be another insert of the " +
+                "same request, and the ancestors are computed from the parent. An edit applies when its version still " +
+                "matches and the element isn't deleted. Values are trimmed; a value colliding with a live sibling " +
+                "(case-insensitive) gets the first free \" (n)\" suffix. Returns every changed element's final value, " +
+                "new version and deleted flag. An invalid value, an id used twice or an insert id that already exists " +
+                "is a 400 problem; changes made elsewhere are a 409 problem listing every conflicting element under " +
+                $"\"{ApplyProblem.ConflictsMember}\". Nothing is written on an error.");
 
         return app;
     }
@@ -42,28 +44,61 @@ public static class ApplyEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var errors = Validate(request, out var edits);
+        var errors = Validate(request, out var inserts, out var edits);
         if (errors.Count > 0)
         {
             return TypedResults.ValidationProblem(errors, title: "The changes are invalid; nothing was applied.");
         }
 
+        // Inserts under other inserts of the request hang, through them, off a stored parent.
+        var insertIds = inserts.Select(insert => insert.Id).ToArray();
+        var storedParentIds = inserts
+            .Select(insert => insert.ParentId)
+            .Where(parentId => !insertIds.Contains(parentId))
+            .Distinct()
+            .ToArray();
+
         // An element's root never changes, so the touched roots can be read before the transaction.
-        var roots = await TouchedRootsAsync(db, edits, cancellationToken);
-        loggerFactory.CreateLogger(typeof(ApplyEndpoints))
-            .LogInformation("Applying {EditCount} edits in {RootCount} root trees", edits.Count, roots.Count);
+        var roots = await TouchedRootsAsync(db, [.. storedParentIds, .. edits.Select(edit => edit.Id)], cancellationToken);
+        loggerFactory.CreateLogger(typeof(ApplyEndpoints)).LogInformation(
+            "Applying {InsertCount} inserts and {EditCount} edits in {RootCount} root trees",
+            inserts.Count,
+            edits.Count,
+            roots.Count);
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         // Advisory locks, one per touched root in sorted order, belong here (ticket #10).
+
+        var existingIds = await db.Nodes
+            .Where(n => insertIds.Contains(n.Id))
+            .Select(n => n.Id)
+            .ToListAsync(cancellationToken);
+        if (existingIds.Count > 0)
+        {
+            // Ids are final at creation, so reusing one (even a deleted element's) is a client error, not a conflict.
+            var idErrors = request.Inserts.Index()
+                .Where(entry => existingIds.Contains(entry.Item.Id))
+                .ToDictionary(
+                    entry => $"inserts[{entry.Index}].id",
+                    entry => new[] { $"An element with the id {entry.Item.Id} already exists." });
+            return TypedResults.ValidationProblem(idErrors, title: "The changes are invalid; nothing was applied.");
+        }
+
+        var parents = await db.Nodes
+            .Where(n => storedParentIds.Contains(n.Id))
+            .ToDictionaryAsync(n => n.Id, cancellationToken);
 
         var editIds = edits.Select(edit => edit.Id).ToArray();
         var nodes = await db.Nodes
             .Where(n => editIds.Contains(n.Id))
             .ToDictionaryAsync(n => n.Id, cancellationToken);
 
-        var conflicts = edits
-            .Select(edit => EditConflict(edit, nodes.GetValueOrDefault(edit.Id)))
+        var conflicts = storedParentIds
+            .Select(parentId => ParentConflict(parentId, parents.GetValueOrDefault(parentId)))
+            .Concat(edits.Select(edit => EditConflict(edit, nodes.GetValueOrDefault(edit.Id))))
             .OfType<NodeConflict>()
+            // A deleted parent that is also edited is listed once.
+            .Distinct()
             .ToList();
         if (conflicts.Count > 0)
         {
@@ -75,7 +110,27 @@ public static class ApplyEndpoints
                 extensions: new Dictionary<string, object?> { [ApplyProblem.ConflictsMember] = conflicts });
         }
 
-        var applied = new List<AppliedNode>(edits.Count);
+        var applied = new List<AppliedNode>(inserts.Count + edits.Count);
+        var inserted = new Dictionary<Guid, Node>(inserts.Count);
+        foreach (var insert in inserts)
+        {
+            // Inserts are ordered parents first, so a parent inserted by this request is already written.
+            var parent = inserted.GetValueOrDefault(insert.ParentId) ?? parents[insert.ParentId];
+            var node = new Node
+            {
+                Id = insert.Id,
+                ParentId = parent.Id,
+                // The position comes from the stored parent alone; nothing else the client sends is trusted.
+                Ancestors = Ancestry.ForChild(parent.Ancestors, insert.Id),
+            };
+            node.Value = await ResolveSiblingValueAsync(db, node, insert.Value, cancellationToken);
+            db.Nodes.Add(node);
+            // One insert at a time, so the next suffix sees this value among its siblings.
+            await db.SaveChangesAsync(cancellationToken);
+            inserted.Add(node.Id, node);
+            applied.Add(new AppliedNode(node.Id, node.Value, node.Version, node.IsDeleted));
+        }
+
         foreach (var edit in edits)
         {
             var node = nodes[edit.Id];
@@ -91,28 +146,27 @@ public static class ApplyEndpoints
     }
 
     /// <summary>
-    /// Request-level rules, checked before touching the database: valid values and each id at most once.
-    /// On success, <paramref name="edits"/> carry normalised values.
+    /// Request-level rules, checked before touching the database: valid values, each id at most once, and new
+    /// parents that lead to a stored element. On success, <paramref name="inserts"/> are ordered parents first and
+    /// both lists carry normalised values.
     /// </summary>
-    private static Dictionary<string, string[]> Validate(ApplyRequest request, out List<NodeEdit> edits)
+    private static Dictionary<string, string[]> Validate(
+        ApplyRequest request,
+        out List<NodeInsert> inserts,
+        out List<NodeEdit> edits)
     {
         var errors = new Dictionary<string, string[]>();
-        var inserts = request.Inserts ?? [];
         var deletes = request.Deletes ?? [];
         edits = [];
 
-        // Inserts come with ticket #7 and deletes with #8; until then they are refused rather than ignored.
-        if (inserts.Count > 0)
-        {
-            errors["inserts"] = ["Inserts are not supported yet."];
-        }
-
+        // Deletes come with ticket #8; until then they are refused rather than ignored.
         if (deletes.Count > 0)
         {
             errors["deletes"] = ["Deletes are not supported yet."];
         }
 
-        var ids = new HashSet<Guid>(inserts.Where(insert => insert is not null).Select(insert => insert.Id));
+        var ids = new HashSet<Guid>();
+        inserts = ValidateInserts(request.Inserts ?? [], ids, errors);
         var requestEdits = request.Edits ?? [];
         for (var i = 0; i < requestEdits.Count; i++)
         {
@@ -141,18 +195,102 @@ public static class ApplyEndpoints
         return errors;
     }
 
+    /// <summary>
+    /// Checks every insert, adding its id to <paramref name="ids"/>, and returns the valid ones parents first
+    /// (request order otherwise). An insert whose new parents loop back instead of reaching a stored element is invalid.
+    /// </summary>
+    private static List<NodeInsert> ValidateInserts(
+        IReadOnlyList<NodeInsert> requestInserts,
+        HashSet<Guid> ids,
+        Dictionary<string, string[]> errors)
+    {
+        var valid = new List<(int Index, NodeInsert Insert)>();
+        for (var i = 0; i < requestInserts.Count; i++)
+        {
+            var insert = requestInserts[i];
+            if (insert is null)
+            {
+                errors[$"inserts[{i}]"] = ["An insert is required."];
+                continue;
+            }
+
+            var isValid = true;
+            if (insert.Id == Guid.Empty)
+            {
+                errors[$"inserts[{i}].id"] = ["An id is required."];
+                isValid = false;
+            }
+            else if (!ids.Add(insert.Id))
+            {
+                errors[$"inserts[{i}].id"] = [$"The id {insert.Id} appears more than once in the request."];
+                isValid = false;
+            }
+
+            if (ElementValue.TryNormalize(insert.Value, out var value, out var error))
+            {
+                insert = insert with { Value = value };
+            }
+            else
+            {
+                errors[$"inserts[{i}].value"] = [error];
+                isValid = false;
+            }
+
+            if (isValid)
+            {
+                valid.Add((i, insert));
+            }
+        }
+
+        // Breadth first from the inserts under stored parents; valid ids are unique, so each insert is queued once.
+        var validIds = valid.Select(entry => entry.Insert.Id).ToHashSet();
+        var children = valid.ToLookup(entry => entry.Insert.ParentId);
+        var queue = new Queue<(int Index, NodeInsert Insert)>(
+            valid.Where(entry => !validIds.Contains(entry.Insert.ParentId)));
+        var ordered = new List<NodeInsert>(valid.Count);
+        var reached = new HashSet<int>();
+        while (queue.TryDequeue(out var entry))
+        {
+            ordered.Add(entry.Insert);
+            reached.Add(entry.Index);
+            foreach (var child in children[entry.Insert.Id])
+            {
+                queue.Enqueue(child);
+            }
+        }
+
+        foreach (var (index, insert) in valid.Where(entry => !reached.Contains(entry.Index)))
+        {
+            errors[$"inserts[{index}].parentId"] =
+                [$"The parent {insert.ParentId} leads back to this insert instead of to an existing element."];
+        }
+
+        return ordered;
+    }
+
     private static async Task<List<Guid>> TouchedRootsAsync(
         TreeDbContext db,
-        List<NodeEdit> edits,
+        Guid[] ids,
         CancellationToken cancellationToken)
     {
-        var ids = edits.Select(edit => edit.Id).ToArray();
         var ancestors = await db.Nodes
             .Where(n => ids.Contains(n.Id))
             .Select(n => n.Ancestors)
             .ToListAsync(cancellationToken);
         return [.. ancestors.Select(Ancestry.RootOf).Distinct().Order()];
     }
+
+    /// <summary>
+    /// Why inserts under a stored parent can't be applied, with the database's current state; null when they can.
+    /// </summary>
+    private static NodeConflict? ParentConflict(Guid parentId, Node? parent) => parent switch
+    {
+        // A changed parent value is fine; only an element that is gone can't take children.
+        null => new NodeConflict(parentId, ConflictReason.Deleted, Value: null, Version: null, IsDeleted: true),
+        { IsDeleted: true } =>
+            new NodeConflict(parent.Id, ConflictReason.Deleted, parent.Value, parent.Version, IsDeleted: true),
+        _ => null,
+    };
 
     /// <summary>Why the edit can't be applied, with the database's current state; null when it can.</summary>
     private static NodeConflict? EditConflict(NodeEdit edit, Node? node) => node switch
