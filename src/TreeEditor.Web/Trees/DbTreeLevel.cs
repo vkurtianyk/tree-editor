@@ -63,6 +63,55 @@ public sealed class DbTreeLevel(Guid? parentId)
             IsLoading = false;
         }
     }
+
+    /// <summary>
+    /// Loads this level again as a new one, as many rows as it has loaded, and expands again the rows expanded here,
+    /// their levels reloaded the same way (one request per page, level by level). So a reload after an Apply or a
+    /// Reset shows the database as it is now without collapsing the tree. Collapsed levels are dropped and load
+    /// fresh on the next expand.
+    /// </summary>
+    public async Task<DbTreeLevel> ReloadAsync(TreeApiClient api, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        var fresh = new DbTreeLevel(ParentId);
+        do
+        {
+            await fresh.LoadNextPageAsync(api, cancellationToken);
+        }
+        while (fresh.Error is null && fresh.HasMore && fresh.nodes.Count < nodes.Count);
+
+        var expanded = nodes
+            .Where(node => node.IsExpanded && node.Children is not null)
+            .ToDictionary(node => node.Item.Id, node => node.Children!);
+        foreach (var node in fresh.nodes)
+        {
+            if (node.Item.HasChildren && expanded.TryGetValue(node.Item.Id, out var children))
+            {
+                node.Expand(await children.ReloadAsync(api, cancellationToken));
+            }
+        }
+
+        return fresh;
+    }
+
+    /// <summary>The row with the id among the loaded rows of this level and the levels below it; null when none is.</summary>
+    public NodeListItem? Find(Guid id)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Item.Id == id)
+            {
+                return node.Item;
+            }
+
+            if (node.Children?.Find(id) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
 }
 
 /// <summary>A row of DBTreeView.</summary>
@@ -80,6 +129,13 @@ public sealed class DbTreeNode(NodeListItem item)
     {
         IsExpanded = true;
         return Children ??= new DbTreeLevel(Item.Id);
+    }
+
+    /// <summary>Expands the row with children a reload loaded already.</summary>
+    internal void Expand(DbTreeLevel children)
+    {
+        IsExpanded = true;
+        Children = children;
     }
 
     public void Collapse() => IsExpanded = false;
