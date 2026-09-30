@@ -1,16 +1,66 @@
-@* The database tree, read lazily: the roots first, one level per expand, wide levels a page at a time. *@
+@* The database tree, read lazily: the roots first, one level per expand, wide levels a page at a time.
+   The selected element can be loaded into the local cache. *@
+@implements IDisposable
 @inject TreeApiClient Api
+@inject LocalCache Cache
+@inject ISnackbar Snackbar
+
+<div class="tree-toolbar">
+    @* Disabled for deleted elements, and for cached ones so a reload can't overwrite pending edits. *@
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Download" Disabled="@(!CanLoadIntoCache)"
+               OnClick="LoadIntoCacheAsync">
+        Load into cache
+    </MudButton>
+</div>
 
 <div class="tree" role="tree" aria-label="Database tree">
     @if (roots.IsLoaded && roots.Nodes.Count == 0)
     {
         <MudText Typo="Typo.body2">The database is empty.</MudText>
     }
-    <DbTreeLevelView Level="roots" />
+    <DbTreeLevelView Level="roots" SelectedId="selected?.Id" OnSelect="Select" />
 </div>
 
 @code {
     private readonly DbTreeLevel roots = new(parentId: null);
+    private NodeListItem? selected;
+    private bool loadingIntoCache;
 
-    protected override Task OnInitializedAsync() => roots.LoadNextPageAsync(Api);
+    private bool CanLoadIntoCache =>
+        selected is { IsDeleted: false } && !Cache.IsCached(selected.Id) && !loadingIntoCache;
+
+    protected override Task OnInitializedAsync()
+    {
+        Cache.Changed += OnCacheChanged;
+        return roots.LoadNextPageAsync(Api);
+    }
+
+    private void Select(NodeListItem item) => selected = item;
+
+    private async Task LoadIntoCacheAsync()
+    {
+        if (selected is not { } item || !CanLoadIntoCache)
+        {
+            return;
+        }
+
+        loadingIntoCache = true;
+        try
+        {
+            await Cache.LoadElementAsync(item.Id);
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Could not load \"{item.Value}\" into the cache: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loadingIntoCache = false;
+        }
+    }
+
+    private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Cache.Changed -= OnCacheChanged;
 }

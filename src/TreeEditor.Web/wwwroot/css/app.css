@@ -31,6 +31,33 @@
     text-decoration: line-through;
 }
 
+.tree-value.selectable {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 0 0.25rem;
+}
+
+    .tree-value.selectable:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+
+    .tree-value.selectable.selected {
+        background-color: var(--mud-palette-primary-hover);
+    }
+
+/* Ancestors that aren't cached: not selectable, no actions. */
+.tree-placeholder {
+    color: var(--mud-palette-text-secondary);
+    font-style: italic;
+    padding: 0 0.25rem;
+}
+
+.tree-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
 .visually-hidden {
     position: absolute;
     width: 1px;

@@ -4,7 +4,8 @@
 @foreach (var node in Level.Nodes)
 {
     <div @key="node.Item.Id" role="treeitem" data-node-id="@node.Item.Id"
-         aria-expanded="@(node.Item.HasChildren ? (node.IsExpanded ? "true" : "false") : null)">
+         aria-expanded="@(node.Item.HasChildren ? (node.IsExpanded ? "true" : "false") : null)"
+         aria-selected="@(node.Item.Id == SelectedId ? "true" : "false")">
         <div class="tree-row">
             @if (node.Item.HasChildren)
             {
@@ -17,12 +18,12 @@
             {
                 <span class="tree-expander-spacer"></span>
             }
-            <span class="@(node.Item.IsDeleted ? "tree-value deleted" : "tree-value")">@node.Item.Value</span>
+            <span class="@ValueClass(node.Item)" @onclick="() => OnSelect.InvokeAsync(node.Item)">@node.Item.Value</span>
         </div>
         @if (node.IsExpanded && node.Children is { } children)
         {
             <div role="group" class="tree-group">
-                <DbTreeLevelView Level="children" />
+                <DbTreeLevelView Level="children" SelectedId="SelectedId" OnSelect="OnSelect" />
             </div>
         }
     </div>
@@ -51,6 +52,17 @@ else if (Level.HasMore)
 @code {
     [Parameter, EditorRequired]
     public DbTreeLevel Level { get; set; } = null!;
+
+    [Parameter]
+    public Guid? SelectedId { get; set; }
+
+    [Parameter]
+    public EventCallback<NodeListItem> OnSelect { get; set; }
+
+    private string ValueClass(NodeListItem item) =>
+        "tree-value selectable"
+        + (item.IsDeleted ? " deleted" : "")
+        + (item.Id == SelectedId ? " selected" : "");
 
     private async Task ToggleAsync(DbTreeNode node)
     {
