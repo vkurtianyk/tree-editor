@@ -136,7 +136,8 @@ public sealed class LocalCache(ICacheApiClient api)
     /// <summary>
     /// Sends every pending change in one request, each edit with the version it was loaded with. On success the final
     /// values and versions are stored and nothing is pending any more. On an error everything stays pending and the
-    /// error propagates. Does nothing when <see cref="CanApply"/> is false.
+    /// error propagates. Does nothing when <see cref="CanApply"/> is false. A response that arrives after
+    /// <see cref="Clear"/> stores nothing: the elements it was for are gone.
     /// </summary>
     public async Task ApplyAsync(CancellationToken cancellationToken = default)
     {
@@ -151,16 +152,20 @@ public sealed class LocalCache(ICacheApiClient api)
             .ToList();
         var request = new ApplyRequest(Inserts: [], edits, Deletes: []);
 
-        state.IsApplying = true;
+        var applyingIn = state;
+        applyingIn.IsApplying = true;
         Changed?.Invoke();
         try
         {
             var response = await api.ApplyAsync(request, cancellationToken);
-            StoreApplied(response);
+            if (applyingIn == state)
+            {
+                StoreApplied(response);
+            }
         }
         finally
         {
-            state.IsApplying = false;
+            applyingIn.IsApplying = false;
             Changed?.Invoke();
         }
     }
@@ -209,7 +214,9 @@ public sealed class LocalCache(ICacheApiClient api)
     {
         public Dictionary<Guid, CachedElement> Elements { get; } = [];
 
-        /// <summary>The loaded copy of every element with a pending change, in the order they were first changed.</summary>
+        /// <summary>
+        /// The loaded copy of every element with a pending change, in the order they were first changed.
+        /// </summary>
         public OrderedDictionary<Guid, CachedElement> Originals { get; } = [];
 
         /// <summary>An Apply request is in flight for these elements.</summary>

@@ -1,5 +1,6 @@
 using TreeEditor.Contracts;
 using TreeEditor.Web.Cache;
+using static TreeEditor.Web.Tests.Cache.LocalCacheEditTests;
 
 namespace TreeEditor.Web.Tests.Cache;
 
@@ -78,6 +79,80 @@ public sealed class LocalCacheClearTests
         Assert.False(cache.IsCached(leaf.Id));
         Assert.Empty(cache.ViewTree);
         Assert.Equal(1, changes);
+    }
+
+    [Fact]
+    public async Task Clear_drops_pending_edits()
+    {
+        var (tree, n) = Siblings();
+        var api = new FakeCacheApiClient(tree);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var cache = await LoadedAsync(api, n["Alpha"], n["Beta"]);
+        cache.EditValue(n["Alpha"].Id, "Gamma");
+
+        cache.Clear();
+
+        Assert.False(cache.HasPendingChanges);
+        Assert.False(cache.CanApply);
+        await cache.LoadElementAsync(n["Alpha"].Id, cancellationToken);
+        Assert.Equal(CachedElement.From(n["Alpha"]), cache.Find(n["Alpha"].Id));
+        await cache.ApplyAsync(cancellationToken);
+        Assert.Empty(api.ApplyRequests);
+    }
+
+    [Fact]
+    public async Task Apply_that_finishes_after_a_clear_stores_nothing()
+    {
+        var (tree, n) = Siblings();
+        var api = new FakeCacheApiClient(tree);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var cache = await LoadedAsync(api, n["Alpha"]);
+        cache.EditValue(n["Alpha"].Id, "Gamma");
+        var response = new TaskCompletionSource<ApplyResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        api.OnApply(_ => response.Task);
+        var apply = cache.ApplyAsync(cancellationToken);
+
+        cache.Clear();
+        Assert.False(cache.IsApplying);
+        await cache.LoadElementAsync(n["Alpha"].Id, cancellationToken);
+        response.SetResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Gamma", 5000, IsDeleted: false)]));
+        await apply;
+
+        // The response answers a request sent before the clear (a Reset): the element loaded since keeps what it read.
+        Assert.Equal(CachedElement.From(n["Alpha"]), cache.Find(n["Alpha"].Id));
+        Assert.False(cache.HasPendingChanges);
+        Assert.False(cache.IsApplying);
+    }
+
+    [Fact]
+    public async Task Apply_that_finishes_after_a_clear_leaves_a_later_apply_in_flight()
+    {
+        var (tree, n) = Siblings();
+        var api = new FakeCacheApiClient(tree);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var cache = await LoadedAsync(api, n["Alpha"]);
+        cache.EditValue(n["Alpha"].Id, "Gamma");
+        var first = new TaskCompletionSource<ApplyResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        api.OnApply(_ => first.Task);
+        var firstApply = cache.ApplyAsync(cancellationToken);
+        cache.Clear();
+        await cache.LoadElementAsync(n["Alpha"].Id, cancellationToken);
+        cache.EditValue(n["Alpha"].Id, "Omega");
+        var second = new TaskCompletionSource<ApplyResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        api.OnApply(_ => second.Task);
+        var secondApply = cache.ApplyAsync(cancellationToken);
+
+        first.SetResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Gamma", 5000, IsDeleted: false)]));
+        await firstApply;
+
+        Assert.True(cache.IsApplying);
+        Assert.Equal(ElementState.Edited, cache.Find(n["Alpha"].Id)?.State);
+        second.SetResult(new ApplyResponse([new AppliedNode(n["Alpha"].Id, "Omega", 5001, IsDeleted: false)]));
+        await secondApply;
+        Assert.False(cache.IsApplying);
+        Assert.Equal(
+            CachedElement.From(n["Alpha"]) with { Value = "Omega", Version = 5001 },
+            cache.Find(n["Alpha"].Id));
     }
 
     /// <summary>
