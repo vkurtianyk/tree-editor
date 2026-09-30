@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+TestResults/
+*.user
+
+# IDE
+.idea/
+.vs/
+
+# OS
+.DS_Store
+
+# Assignment text stays local; requirements live in docs and issues
+ASSIGNMENT.md
