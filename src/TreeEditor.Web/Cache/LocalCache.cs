@@ -190,7 +190,8 @@ public sealed class LocalCache(ICacheApiClient api)
     /// nothing is sent until <see cref="ApplyAsync"/>. Their pending edits are dropped: they show their loaded values.
     /// Elements added locally are removed, as they never reached the database; descendants already deleted there
     /// stay as they are. Conflicts of descendants are resolved by the delete: their changes are dropped or covered,
-    /// and their database copy replaces the stale loaded one, so a discard goes back to it.
+    /// and their database copy replaces the stale loaded one, so a discard goes back to it. A conflicting pending
+    /// delete below joins this delete, with what was deleted with it.
     /// </summary>
     public void Delete(Guid id)
     {
@@ -227,10 +228,19 @@ public sealed class LocalCache(ICacheApiClient api)
                 // more either: this delete covers it.
                 state.Originals[member.Id] = DatabaseCopy(state.Originals[member.Id], conflict);
                 MarkPendingDeleted(member);
+                state.DeletedWith[member.Id] = id;
+                foreach (var (deletedId, _) in state.DeletedWith.Where(entry => entry.Value == member.Id).ToList())
+                {
+                    state.DeletedWith[deletedId] = id;
+                }
             }
             else if (!member.IsDeleted)
             {
                 MarkPendingDeleted(member);
+                if (member.Id != id)
+                {
+                    state.DeletedWith[member.Id] = id;
+                }
             }
         }
 
@@ -270,6 +280,7 @@ public sealed class LocalCache(ICacheApiClient api)
         state.Originals.Clear();
         state.NewIds.Clear();
         state.ConflictIds.Clear();
+        state.DeletedWith.Clear();
         state.ViewTree = null;
         Changed?.Invoke();
     }
@@ -339,7 +350,8 @@ public sealed class LocalCache(ICacheApiClient api)
 
     /// <summary>
     /// Resolves a conflict in favour of the database: the element takes the database's value and version, and its
-    /// pending change is dropped. For a pending delete, the cached descendants deleted with it come back too.
+    /// pending change is dropped. For a pending delete, the cached descendants deleted with it come back too; those
+    /// deleted on their own before it stay pending deletes.
     /// </summary>
     public void TakeDatabase(Guid id)
     {
@@ -351,13 +363,15 @@ public sealed class LocalCache(ICacheApiClient api)
 
         if (element.State == ElementState.Deleted)
         {
-            var deletedWithIt = state.Elements.Values
-                .Where(member => member.State == ElementState.Deleted && Ancestry.IsDescendantOf(member.Ancestors, id))
+            var deletedWithIt = state.DeletedWith
+                .Where(entry => entry.Value == id)
+                .Select(entry => entry.Key)
                 .ToList();
-            foreach (var member in deletedWithIt)
+            foreach (var memberId in deletedWithIt)
             {
-                state.Elements[member.Id] = state.Originals[member.Id];
-                state.Originals.Remove(member.Id);
+                state.Elements[memberId] = state.Originals[memberId];
+                state.Originals.Remove(memberId);
+                state.DeletedWith.Remove(memberId);
             }
         }
 
@@ -421,6 +435,7 @@ public sealed class LocalCache(ICacheApiClient api)
 
         state.Originals.Clear();
         state.NewIds.Clear();
+        state.DeletedWith.Clear();
 
         foreach (var node in response.Nodes)
         {
@@ -562,6 +577,8 @@ public sealed class LocalCache(ICacheApiClient api)
         if (deletedAncestors.TrueForAll(ancestor => ancestor.State == ElementState.Deleted))
         {
             MarkPendingDeleted(element);
+            var nearest = deletedAncestors[^1].Id;
+            state.DeletedWith[element.Id] = state.DeletedWith.GetValueOrDefault(nearest, nearest);
         }
         else
         {
@@ -596,6 +613,7 @@ public sealed class LocalCache(ICacheApiClient api)
             };
             state.Originals.Remove(descendant.Id);
             state.ConflictIds.Remove(descendant.Id);
+            state.DeletedWith.Remove(descendant.Id);
         }
     }
 
@@ -620,6 +638,12 @@ public sealed class LocalCache(ICacheApiClient api)
         /// Apply waits until it's empty.
         /// </summary>
         public List<Guid> ConflictIds { get; } = [];
+
+        /// <summary>
+        /// Pending deletes that came with an ancestor's delete, mapped to the element the user deleted;
+        /// <see cref="TakeDatabase"/> on it brings them back. Elements deleted on their own aren't listed.
+        /// </summary>
+        public Dictionary<Guid, Guid> DeletedWith { get; } = [];
 
         /// <summary>An Apply request is in flight for these elements.</summary>
         public bool IsApplying { get; set; }

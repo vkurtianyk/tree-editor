@@ -205,6 +205,71 @@ public sealed class LocalCacheConflictTests
     }
 
     [Fact]
+    public async Task Take_database_on_a_conflicting_delete_leaves_the_descendants_deleted_on_their_own_pending()
+    {
+        var (tree, n) = Sample();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Alpha"], n["A1"], n["A2"]);
+        cache.Delete(n["A1"].Id);
+        cache.Delete(n["Alpha"].Id);
+        OnApplyConflict(api, new NodeConflict(n["Alpha"].Id, ConflictReason.VersionChanged, "Alpha elsewhere", 2000, false));
+        await ApplyRejectedAsync(cache);
+
+        cache.TakeDatabase(n["Alpha"].Id);
+
+        Assert.Equal(
+            CachedElement.From(n["Alpha"]) with { Value = "Alpha elsewhere", Version = 2000 },
+            cache.Find(n["Alpha"].Id));
+        Assert.Equal(ElementState.Deleted, cache.Find(n["A1"].Id)?.State);
+        Assert.Equal(ElementState.Deleted, cache.Find(n["A2"].Id)?.State);
+        api.OnApplySucceed(newVersion: 5000);
+        await cache.ApplyAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(new NodeDelete(n["A1"].Id, n["A1"].Version), Assert.Single(api.ApplyRequests[^1].Deletes));
+    }
+
+    [Fact]
+    public async Task Take_database_on_a_conflicting_delete_brings_back_what_was_deleted_below_it_afterwards()
+    {
+        var (tree, n) = Sample();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Alpha"], n["A1"]);
+        cache.Delete(n["Alpha"].Id);
+        // Loaded below A1, which was deleted with Alpha.
+        await cache.LoadElementAsync(n["A2"].Id, TestContext.Current.CancellationToken);
+        OnApplyConflict(api, new NodeConflict(n["Alpha"].Id, ConflictReason.VersionChanged, "Alpha elsewhere", 2000, false));
+        await ApplyRejectedAsync(cache);
+
+        cache.TakeDatabase(n["Alpha"].Id);
+
+        Assert.Equal(CachedElement.From(n["A1"]), cache.Find(n["A1"].Id));
+        Assert.Equal(CachedElement.From(n["A2"]), cache.Find(n["A2"].Id));
+        Assert.False(cache.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task Take_database_on_a_delete_that_covered_a_conflicting_delete_takes_the_database_copy_of_both()
+    {
+        var (tree, n) = Sample();
+        var api = new FakeCacheApiClient(tree);
+        var cache = await LoadedAsync(api, n["Alpha"], n["A1"], n["A2"]);
+        cache.Delete(n["A1"].Id);
+        OnApplyConflict(api, new NodeConflict(n["A1"].Id, ConflictReason.VersionChanged, "A1 elsewhere", 2000, false));
+        await ApplyRejectedAsync(cache);
+        cache.Delete(n["Alpha"].Id);
+        OnApplyConflict(api, new NodeConflict(n["Alpha"].Id, ConflictReason.VersionChanged, "Alpha elsewhere", 2001, false));
+        await ApplyRejectedAsync(cache);
+
+        cache.TakeDatabase(n["Alpha"].Id);
+
+        // Nobody chose to keep the delete of A1 over the other change: it comes back as the database has it.
+        Assert.Equal(
+            CachedElement.From(n["A1"]) with { Value = "A1 elsewhere", Version = 2000 },
+            cache.Find(n["A1"].Id));
+        Assert.Equal(CachedElement.From(n["A2"]), cache.Find(n["A2"].Id));
+        Assert.False(cache.HasPendingChanges);
+    }
+
+    [Fact]
     public async Task Keep_mine_keeps_the_edit_on_the_database_version_and_the_next_apply_sends_it()
     {
         var (tree, n) = Sample();
