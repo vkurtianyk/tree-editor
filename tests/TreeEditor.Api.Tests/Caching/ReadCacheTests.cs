@@ -88,6 +88,38 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Children_lists_right_after_an_Apply_inserting_show_the_new_children_with_their_final_values()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var home = tree.Root("Home");
+        var garden = tree.Child(home, "Garden");
+        var kitchen = tree.Child(home, "Kitchen");
+        tree.Child(kitchen, "Knife");
+        await api.ArrangeAsync(tree, cancellationToken);
+        Assert.False((await ListAsync(api, home.Id, after: null, cancellationToken)).Items[0].HasChildren);
+        Assert.Empty((await ListAsync(api, garden.Id, after: null, cancellationToken)).Items);
+        Assert.Equal(["Knife"], Values(await ListAsync(api, kitchen.Id, after: null, cancellationToken)));
+
+        var applied = await ApplyAsync(
+            api,
+            new ApplyRequest(
+                [
+                    new NodeInsert(Guid.CreateVersion7(), kitchen.Id, " knife "),
+                    new NodeInsert(Guid.CreateVersion7(), garden.Id, "Rake"),
+                ],
+                [],
+                []),
+            cancellationToken);
+
+        Assert.Equal(["knife (1)", "Rake"], applied.Nodes.Select(node => node.Value));
+        Assert.Equal(["Knife", "knife (1)"], Values(await ListAsync(api, kitchen.Id, after: null, cancellationToken)));
+        Assert.Equal(["Rake"], Values(await ListAsync(api, garden.Id, after: null, cancellationToken)));
+        Assert.True((await ListAsync(api, home.Id, after: null, cancellationToken)).Items[0].HasChildren);
+    }
+
+    [Fact]
     public async Task Roots_list_and_load_right_after_an_Apply_renaming_a_root_return_the_new_value_and_version()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -174,10 +206,14 @@ public sealed class ReadCacheTests(PostgresFixture postgres)
         return node;
     }
 
-    private static async Task<ApplyResponse> ApplyEditsAsync(
-        ApiHarness api, NodeEdit[] edits, CancellationToken cancellationToken)
+    private static Task<ApplyResponse> ApplyEditsAsync(
+        ApiHarness api, NodeEdit[] edits, CancellationToken cancellationToken) =>
+        ApplyAsync(api, new ApplyRequest([], edits, []), cancellationToken);
+
+    private static async Task<ApplyResponse> ApplyAsync(
+        ApiHarness api, ApplyRequest request, CancellationToken cancellationToken)
     {
-        using var response = await api.Client.PostAsJsonAsync(ApiRoutes.Apply, new ApplyRequest([], edits, []), cancellationToken);
+        using var response = await api.Client.PostAsJsonAsync(ApiRoutes.Apply, request, cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var applied = await response.Content.ReadFromJsonAsync<ApplyResponse>(cancellationToken);
         Assert.NotNull(applied);
