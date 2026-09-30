@@ -159,6 +159,41 @@ public sealed class ApplyConcurrencyTests(PostgresFixture postgres)
         Assert.Equal("Gamma (1)", Assert.Single((await ReadOkAsync(renames[1], cancellationToken)).Nodes).Value);
     }
 
+    [Fact]
+    public async Task A_conflicting_Apply_writes_nothing_and_releases_the_trees_lock_for_the_next_Apply()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var api = await ApiHarness.StartAsync(postgres, cancellationToken);
+        var tree = new TreeBuilder();
+        var root = tree.Root("Root");
+        var alpha = tree.Child(root, "Alpha");
+        var beta = tree.Child(root, "Beta");
+        await api.ArrangeAsync(tree, cancellationToken);
+        // Someone else renames Beta after this client loaded it.
+        await ReadOkAsync(ApplyAsync(api, Edit(beta.Id, "Beta elsewhere", beta.Version), cancellationToken), cancellationToken);
+
+        // Queued behind the test's lock, so the conflict is found only once the Apply holds the tree's lock.
+        await using var held = await HeldAdvisoryLock.TakeAsync(api, ApplyLocks.KeyOf(root.Id), cancellationToken);
+        var conflicting = await QueueInOrderAsync(
+            api,
+            held,
+            [new ApplyRequest([], [new NodeEdit(alpha.Id, "Alpha mine", alpha.Version), new NodeEdit(beta.Id, "Beta mine", beta.Version)], [])],
+            cancellationToken);
+        await held.ReleaseAsync(cancellationToken);
+        using (var response = await conflicting[0])
+        {
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
+
+        var alphaNow = await LoadAsync(api, alpha.Id, cancellationToken);
+        Assert.Equal(("Alpha", alpha.Version), (alphaNow.Value, alphaNow.Version));
+        Assert.Equal("Beta elsewhere", (await LoadAsync(api, beta.Id, cancellationToken)).Value);
+        // A lock the conflicting Apply kept would block this one.
+        var next = ApplyAsync(api, Edit(alpha.Id, "Alpha next", alpha.Version), cancellationToken);
+        var nextApplied = await ReadOkAsync(next.WaitAsync(UnblockedTimeout, cancellationToken), cancellationToken);
+        Assert.Equal("Alpha next", Assert.Single(nextApplied.Nodes).Value);
+    }
+
     /// <summary>
     /// Sends the Applies one by one, each only once the previous ones wait for <paramref name="held"/>, so they get
     /// the lock in this order when it's released.
