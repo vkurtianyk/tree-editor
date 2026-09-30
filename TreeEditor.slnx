@@ -7,6 +7,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/TreeEditor.Api/TreeEditor.Api.csproj" />
+    <Project Path="src/TreeEditor.AppHost/TreeEditor.AppHost.csproj" />
     <Project Path="src/TreeEditor.Contracts/TreeEditor.Contracts.csproj" />
     <Project Path="src/TreeEditor.Data/TreeEditor.Data.csproj" />
     <Project Path="src/TreeEditor.Domain/TreeEditor.Domain.csproj" />
