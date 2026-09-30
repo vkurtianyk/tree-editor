@@ -11,8 +11,8 @@ namespace TreeEditor.Api.Apply;
 /// <summary>
 /// Apply: every pending change of a local cache in one all-or-nothing transaction.
 /// Steps: validate the request (400), derive the touched roots from the stored ancestors, <c>BEGIN</c>,
-/// check every change against the database and collect the conflicts (409), then write inserts, edits and
-/// deletes in that order and <c>COMMIT</c>.
+/// lock the touched root trees (<see cref="ApplyLocks"/>), check every change against the database and collect the
+/// conflicts (409), then write inserts, edits and deletes in that order and <c>COMMIT</c>.
 /// </summary>
 public static class ApplyEndpoints
 {
@@ -61,7 +61,8 @@ public static class ApplyEndpoints
             .Distinct()
             .ToArray();
 
-        // An element's root never changes, so the touched roots can be read before the transaction.
+        // An element's root never changes, so the touched roots can be read before the transaction. An id stored
+        // only after this read, by an Apply committing meanwhile, gets no lock.
         var roots = await TouchedRootsAsync(
             db,
             [.. storedParentIds, .. edits.Select(edit => edit.Id), .. deletes.Select(delete => delete.Id)],
@@ -74,7 +75,10 @@ public static class ApplyEndpoints
             roots.Count);
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-        // Advisory locks, one per touched root in sorted order, belong here (ticket #10).
+        // Before any read: an Apply on the same root trees commits first, and the reads below see its writes.
+        // Roots are siblings of each other, so renaming one also takes the roots lock.
+        var renamesRoot = edits.Any(edit => roots.Contains(edit.Id));
+        await ApplyLocks.LockAsync(db, roots, renamesRoot, cancellationToken);
 
         var existingIds = await db.Nodes
             .Where(n => insertIds.Contains(n.Id))
