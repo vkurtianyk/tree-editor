@@ -1,3 +1,6 @@
+using TreeEditor.Contracts;
+using TreeEditor.Domain;
+
 namespace TreeEditor.Web.Cache;
 
 /// <summary>
@@ -7,10 +10,24 @@ namespace TreeEditor.Web.Cache;
 public sealed class LocalCache(ICacheApiClient api)
 {
     private readonly Dictionary<Guid, CachedElement> elements = [];
+
+    /// <summary>The loaded copy of every element with a pending change, in the order they were first changed.</summary>
+    private readonly OrderedDictionary<Guid, CachedElement> originals = [];
+
     private IReadOnlyList<CachedTreeRow>? viewTree;
 
     /// <summary>Raised after every change of what the queries return.</summary>
     public event Action? Changed;
+
+    /// <summary>Raised after an Apply succeeded, once its results are stored: the database changed.</summary>
+    public event Action? Applied;
+
+    public bool HasPendingChanges => originals.Count > 0;
+
+    /// <summary>An Apply request is in flight. Only one is sent at a time; edits and discard wait for it.</summary>
+    public bool IsApplying { get; private set; }
+
+    public bool CanApply => HasPendingChanges && !IsApplying;
 
     /// <summary>
     /// The cached elements in their hierarchy. Each element hangs under its nearest cached ancestor; ancestors
@@ -19,6 +36,9 @@ public sealed class LocalCache(ICacheApiClient api)
     public IReadOnlyList<CachedTreeRow> ViewTree => viewTree ??= ViewTreeBuilder.Build(elements.Values);
 
     public bool IsCached(Guid id) => elements.ContainsKey(id);
+
+    /// <summary>The cached element with the id, with any pending change; null when it isn't cached.</summary>
+    public CachedElement? Find(Guid id) => elements.GetValueOrDefault(id);
 
     /// <summary>
     /// Loads an element into the cache through load node. An element that is already cached is left as it is and
@@ -41,5 +61,141 @@ public sealed class LocalCache(ICacheApiClient api)
 
         viewTree = null;
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Changes an element's value locally; nothing is sent until <see cref="ApplyAsync"/>. The value is trimmed and
+    /// validated at once: an invalid one is returned as an error and changes nothing. A value colliding with a cached
+    /// live sibling gets the first free " (n)" suffix; the server resolves again against every sibling on Apply.
+    /// Changing the value back to the loaded one leaves nothing pending.
+    /// </summary>
+    public ValueEditResult EditValue(Guid id, string? value)
+    {
+        if (IsApplying)
+        {
+            throw new InvalidOperationException("Elements can't be edited while an Apply is in flight.");
+        }
+
+        if (!elements.TryGetValue(id, out var element))
+        {
+            throw new InvalidOperationException($"The element {id} isn't cached.");
+        }
+
+        if (element.IsDeleted)
+        {
+            throw new InvalidOperationException($"The element {id} is deleted and can't be edited.");
+        }
+
+        if (!ElementValue.TryNormalize(value, out var normalized, out var error))
+        {
+            return new ValueEditResult(Value: null, error);
+        }
+
+        var siblings = elements.Values
+            .Where(sibling => sibling.ParentId == element.ParentId)
+            .Select(sibling => new SiblingValue(sibling.Id, sibling.Value, sibling.IsDeleted));
+        var resolved = SiblingSuffix.Resolve(normalized, siblings, self: id);
+
+        var original = originals.GetValueOrDefault(id, element);
+        if (resolved == original.Value)
+        {
+            originals.Remove(id);
+            elements[id] = original;
+        }
+        else
+        {
+            originals.TryAdd(id, element);
+            elements[id] = element with { Value = resolved, State = ElementState.Edited };
+        }
+
+        viewTree = null;
+        Changed?.Invoke();
+        return new ValueEditResult(resolved, Error: null);
+    }
+
+    /// <summary>
+    /// Drops every pending change: changed elements go back to their loaded state, and clean elements stay cached.
+    /// Nothing is sent to the server.
+    /// </summary>
+    public void DiscardAll()
+    {
+        if (IsApplying)
+        {
+            throw new InvalidOperationException("Changes can't be discarded while an Apply is in flight.");
+        }
+
+        if (originals.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var (id, original) in originals)
+        {
+            elements[id] = original;
+        }
+
+        originals.Clear();
+        viewTree = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Sends every pending change in one request, each edit with the version it was loaded with. On success the final
+    /// values and versions are stored and nothing is pending any more. On an error everything stays pending and the
+    /// error propagates. Does nothing when <see cref="CanApply"/> is false.
+    /// </summary>
+    public async Task ApplyAsync(CancellationToken cancellationToken = default)
+    {
+        if (!CanApply)
+        {
+            return;
+        }
+
+        var edits = originals.Keys
+            .Select(id => elements[id])
+            .Select(element => new NodeEdit(element.Id, element.Value, element.Version))
+            .ToList();
+        var request = new ApplyRequest(Inserts: [], edits, Deletes: []);
+
+        IsApplying = true;
+        Changed?.Invoke();
+        try
+        {
+            var response = await api.ApplyAsync(request, cancellationToken);
+            StoreApplied(response);
+        }
+        finally
+        {
+            IsApplying = false;
+            Changed?.Invoke();
+        }
+
+        Applied?.Invoke();
+    }
+
+    /// <summary>The applied elements become clean, with the server's final values and versions.</summary>
+    private void StoreApplied(ApplyResponse response)
+    {
+        foreach (var id in originals.Keys)
+        {
+            elements[id] = elements[id] with { State = ElementState.Clean };
+        }
+
+        foreach (var node in response.Nodes)
+        {
+            if (elements.TryGetValue(node.Id, out var element))
+            {
+                elements[node.Id] = element with
+                {
+                    Value = node.Value,
+                    Version = node.Version,
+                    IsDeleted = node.IsDeleted,
+                    State = ElementState.Clean,
+                };
+            }
+        }
+
+        originals.Clear();
+        viewTree = null;
     }
 }
