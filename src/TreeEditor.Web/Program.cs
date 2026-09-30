@@ -20,7 +20,7 @@ builder.Services.AddScoped<ICacheApiClient>(services => services.GetRequiredServ
 // One cache per browser tab, in memory only: a page refresh starts empty.
 builder.Services.AddScoped<LocalCache>();
 
-// Lets the toolbar's Reset reload DBTreeView from the roots.
+// Lets the toolbar's Reset and Apply reload DBTreeView from the roots.
 builder.Services.AddScoped<DbTreeReload>();
 
 await builder.Build().RunAsync();

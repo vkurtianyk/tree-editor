@@ -1,7 +1,31 @@
 @* The local cache's elements in their hierarchy. Ancestors that aren't cached show as placeholder rows;
-   only real elements can be selected. *@
+   only real elements can be selected. The selected live element's value can be edited; the edit stays local
+   until Apply. *@
+@using TreeEditor.Domain
 @implements IDisposable
 @inject LocalCache Cache
+@inject ISnackbar Snackbar
+
+<div class="tree-toolbar">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Edit" Disabled="@(!CanEdit)" OnClick="StartEdit">
+        Edit
+    </MudButton>
+</div>
+
+@if (Editing is { } element)
+{
+    <div class="tree-editor">
+        <MudTextField T="string" @bind-Value="draft" Label="Value" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Immediate="true" AutoFocus="true" Counter="@ElementValue.MaxLength"
+                      Error="@(DraftError is not null)" ErrorText="@DraftError" OnKeyDown="OnEditorKeyDown" />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   Disabled="@(DraftError is not null || Cache.IsApplying)" OnClick="() => Save(element)">
+            Save
+        </MudButton>
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="CancelEdit">Cancel</MudButton>
+    </div>
+}
 
 <div class="tree" role="tree" aria-label="Cached tree">
     @if (Cache.ViewTree.Count == 0)
@@ -15,13 +39,85 @@
 
 @code {
     private Guid? selectedId;
+    private Guid? editingId;
+    private string? draft;
 
     /// <summary>The selected element, while it is still cached.</summary>
     private Guid? SelectedId => selectedId is { } id && Cache.IsCached(id) ? id : null;
 
+    private CachedElement? Selected => SelectedId is { } id ? Cache.Find(id) : null;
+
+    private bool CanEdit => Selected is { IsDeleted: false } && !Cache.IsApplying;
+
+    /// <summary>The element being edited, while it is still selected, cached and live.</summary>
+    private CachedElement? Editing => editingId == SelectedId && Selected is { IsDeleted: false } element
+        ? element
+        : null;
+
+    private string? DraftError => ElementValue.Validate(draft);
+
     protected override void OnInitialized() => Cache.Changed += OnCacheChanged;
 
-    private void Select(Guid id) => selectedId = id;
+    private void Select(Guid id)
+    {
+        if (id != selectedId)
+        {
+            CancelEdit();
+        }
+
+        selectedId = id;
+    }
+
+    private void StartEdit()
+    {
+        if (Selected is not { IsDeleted: false } element)
+        {
+            return;
+        }
+
+        editingId = element.Id;
+        draft = element.Value;
+    }
+
+    private void CancelEdit()
+    {
+        editingId = null;
+        draft = null;
+    }
+
+    private void Save(CachedElement element)
+    {
+        if (Cache.IsApplying)
+        {
+            return;
+        }
+
+        var result = Cache.EditValue(element.Id, draft);
+        if (result.Error is not null)
+        {
+            // The field already shows the error; nothing was changed.
+            return;
+        }
+
+        if (result.Value != draft?.Trim())
+        {
+            Snackbar.Add($"A sibling already has that value; it was changed to \"{result.Value}\".", Severity.Info);
+        }
+
+        CancelEdit();
+    }
+
+    private void OnEditorKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            CancelEdit();
+        }
+        else if (args.Key == "Enter" && Editing is { } element && DraftError is null)
+        {
+            Save(element);
+        }
+    }
 
     private async void OnCacheChanged() => await InvokeAsync(StateHasChanged);
 

@@ -2,7 +2,7 @@ using TreeEditor.Contracts;
 
 namespace TreeEditor.Web.Cache;
 
-/// <summary>An element held by the <see cref="LocalCache"/>, as it was loaded.</summary>
+/// <summary>An element held by the <see cref="LocalCache"/>: as it was loaded, plus any pending local change.</summary>
 public sealed record CachedElement(
     Guid Id,
     Guid? ParentId,
@@ -11,6 +11,9 @@ public sealed record CachedElement(
     uint Version,
     bool IsDeleted)
 {
+    /// <summary>Whether the element carries a pending change; its version stays the loaded one until Apply.</summary>
+    public ElementState State { get; init; }
+
     public static CachedElement From(NodeDetails node)
     {
         ArgumentNullException.ThrowIfNull(node);

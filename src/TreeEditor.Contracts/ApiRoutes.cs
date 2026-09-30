@@ -14,6 +14,12 @@ public static class ApiRoutes
     /// </summary>
     public const string Children = Nodes + "/children";
 
+    /// <summary>
+    /// Apply (POST): every pending change in one all-or-nothing transaction. 400 problem for a malformed request,
+    /// 409 problem listing the conflicting elements.
+    /// </summary>
+    public const string Apply = "/api/apply";
+
     /// <summary>Reset (POST): restores the sample data; 204 when done.</summary>
     public const string Reset = "/api/reset";
 
